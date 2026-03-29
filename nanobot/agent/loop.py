@@ -520,6 +520,10 @@ class AgentLoop:
 
         history = session.get_history(max_messages=0)
         rag_context, used_fallback = await self._get_rag_context(msg.content)
+        
+        # Detect user mood for response adjustment
+        user_mood = await self._detect_user_mood(msg.content, session)
+        
         initial_messages = self.context.build_messages(
             history=history,
             current_message=msg.content,
