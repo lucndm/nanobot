@@ -116,6 +116,7 @@ class VectorMemoryStore:
         try:
             query_vector = await self.embed([query])
             if not query_vector or not query_vector[0]:
+                logger.warning("RAG: embed returned empty vector")
                 return []
         except Exception:
             logger.warning("RAG: failed to embed query")
@@ -129,14 +130,17 @@ class VectorMemoryStore:
                 limit=fetch_k,
                 with_payload=True,
             ).points
+            logger.debug("RAG: retrieved {} hits for query", len(hits))
         except Exception:
             logger.warning("RAG: Qdrant search failed")
             return []
 
         if not hits:
+            logger.debug("RAG: no hits found")
             return []
 
         texts = [hit.payload["text"] for hit in hits if hit.payload.get("text")]
+        logger.debug("RAG: extracted {} texts, rerank_model={}", len(texts), self.rerank_model)
 
         if self.rerank_model and texts:
             reranked = await self._rerank(query, texts)
