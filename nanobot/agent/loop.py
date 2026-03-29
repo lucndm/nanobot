@@ -126,6 +126,7 @@ class AgentLoop:
             max_completion_tokens=provider.generation.max_tokens,
         )
         self.rag: VectorMemoryStore | None = None
+        self._rag_used_fallback: bool = False
         self._register_default_tools()
         self.commands = CommandRouter()
         register_builtin_commands(self.commands)
@@ -149,21 +150,49 @@ class AgentLoop:
         except Exception:
             logger.warning("RAG: failed to initialize vector memory store")
 
-    def _get_rag_context(self, query: str) -> str:
-        """Synchronously retrieve RAG context."""
+    async def _get_rag_context(self, query: str) -> tuple[str, bool]:
+        """Retrieve RAG context. Returns (context_text, used_fallback)."""
         if self.rag is None:
-            return ""
+            return ("", False)
         try:
-            loop = asyncio.get_running_loop()
-            results = loop.run_until_complete(self.rag.retrieve(query))
-        except RuntimeError:
-            results = []
+            results = await self.rag.retrieve(query)
+        except Exception:
+            logger.warning("RAG: retrieve failed, falling back to MEMORY.md")
+            return self._memory_fallback()
+
         if not results:
-            return ""
+            return ("", False)
+
         lines = []
         for r in results:
             lines.append(f"- [score={r["score"]:.3f}] {r["text"]}")
-        return "## Relevant Memories (RAG)\n\n" + "\n".join(lines)
+        return ("## Relevant Memories (RAG)\n\n" + "\n".join(lines), False)
+
+    def _memory_fallback(self) -> tuple[str, bool]:
+        """Fallback to MEMORY.md when RAG is unavailable."""
+        try:
+            memory_text = self.context.memory.get_memory_context()
+            if memory_text:
+                logger.info("RAG: using MEMORY.md fallback")
+                return (memory_text + "\n\n> [Memory fallback: RAG unavailable, showing full memory]", True)
+        except Exception:
+            pass
+        return ("", False)
+
+    async def _rag_consolidate_and_store(self, session: Any) -> None:
+        """Run memory consolidation then store results to RAG."""
+        await self.memory_consolidator.maybe_consolidate_by_tokens(session)
+        if self.rag is None:
+            return
+        try:
+            store = self.memory_consolidator.store
+            long_term = store.read_long_term()
+            if long_term:
+                paragraphs = [p.strip() for p in long_term.split("\n\n") if len(p.strip()) > 30]
+                if paragraphs:
+                    await self.rag.store(session.key, paragraphs)
+        except Exception:
+            logger.debug("RAG: background store failed for {}", session.key)
 
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
@@ -447,7 +476,7 @@ class AgentLoop:
             logger.info("Processing system message from {}", msg.sender_id)
             key = f"{channel}:{chat_id}"
             session = self.sessions.get_or_create(key)
-            await self.memory_consolidator.maybe_consolidate_by_tokens(session)
+            await self._rag_consolidate_and_store(session)
             self._set_tool_context(channel, chat_id, msg.metadata.get("message_id"))
             history = session.get_history(max_messages=0)
             current_role = "assistant" if msg.sender_id == "subagent" else "user"
@@ -462,12 +491,13 @@ class AgentLoop:
             )
             self._save_turn(session, all_msgs, 1 + len(history))
             self.sessions.save(session)
-            self._schedule_background(self.memory_consolidator.maybe_consolidate_by_tokens(session))
+            self._schedule_background(self._rag_consolidate_and_store(session))
             return OutboundMessage(channel=channel, chat_id=chat_id,
                                   content=final_content or "Background task completed.")
 
         preview = msg.content[:80] + "..." if len(msg.content) > 80 else msg.content
         logger.info("Processing message from {}:{}: {}", msg.channel, msg.sender_id, preview)
+        self._rag_used_fallback = False
 
         key = session_key or msg.session_key
         session = self.sessions.get_or_create(key)
@@ -478,7 +508,7 @@ class AgentLoop:
         if result := await self.commands.dispatch(ctx):
             return result
 
-        await self.memory_consolidator.maybe_consolidate_by_tokens(session)
+        await self._rag_consolidate_and_store(session)
 
         self._set_tool_context(msg.channel, msg.chat_id, msg.metadata.get("message_id"))
         if message_tool := self.tools.get("message"):
@@ -486,7 +516,7 @@ class AgentLoop:
                 message_tool.start_turn()
 
         history = session.get_history(max_messages=0)
-        rag_context = self._get_rag_context(msg.content)
+        rag_context, used_fallback = await self._get_rag_context(msg.content)
         initial_messages = self.context.build_messages(
             history=history,
             current_message=msg.content,
@@ -495,6 +525,7 @@ class AgentLoop:
         )
         if rag_context:
             initial_messages[0]["content"] += "\n\n---\n\n" + rag_context
+        self._rag_used_fallback = used_fallback
 
         async def _bus_progress(content: str, *, tool_hint: bool = False) -> None:
             meta = dict(msg.metadata or {})
@@ -518,7 +549,7 @@ class AgentLoop:
 
         self._save_turn(session, all_msgs, 1 + len(history))
         self.sessions.save(session)
-        self._schedule_background(self.memory_consolidator.maybe_consolidate_by_tokens(session))
+        self._schedule_background(self._rag_consolidate_and_store(session))
 
         if (mt := self.tools.get("message")) and isinstance(mt, MessageTool) and mt._sent_in_turn:
             return None
@@ -529,6 +560,8 @@ class AgentLoop:
         meta = dict(msg.metadata or {})
         if on_stream is not None:
             meta["_streamed"] = True
+        if self._rag_used_fallback and final_content:
+            final_content += "\n\n---\n> [Memory fallback: RAG unavailable, response may not include all relevant memories]"
         return OutboundMessage(
             channel=msg.channel, chat_id=msg.chat_id, content=final_content,
             metadata=meta,
