@@ -141,6 +141,20 @@ class MCPServerConfig(Base):
     tool_timeout: int = 30  # seconds before a tool call is cancelled
     enabled_tools: list[str] = Field(default_factory=lambda: ["*"])  # Only register these tools; accepts raw MCP names or wrapped mcp_<server>_<tool> names; ["*"] = all tools; [] = no tools
 
+
+class RagConfig(Base):
+    """RAG memory configuration."""
+
+    enabled: bool = False
+    qdrant_url: str = "http://localhost:6333"
+    collection: str = "nanobot_memories"
+    embedding_model: str = "text-embedding-3-small"
+    rerank_model: str | None = None
+    rerank_top_k: int = 5
+    score_threshold: float = 0.7
+    api_key: str = ""
+    api_base: str = "http://localhost:11434/v1"
+
 class ToolsConfig(Base):
     """Tools configuration."""
 
@@ -158,6 +172,7 @@ class Config(BaseSettings):
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    rag: RagConfig = Field(default_factory=RagConfig)
 
     @property
     def workspace_path(self) -> Path:

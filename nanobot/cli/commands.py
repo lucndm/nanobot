@@ -551,6 +551,7 @@ def gateway(
         channels_config=config.channels,
         timezone=config.agents.defaults.timezone,
     )
+    agent.init_rag(config.rag)
 
     # Set cron callback (needs agent)
     async def on_cron_job(job: CronJob) -> str | None:
@@ -756,6 +757,7 @@ def agent(
         channels_config=config.channels,
         timezone=config.agents.defaults.timezone,
     )
+    agent_loop.init_rag(config.rag)
 
     # Shared reference for progress callbacks
     _thinking: ThinkingSpinner | None = None

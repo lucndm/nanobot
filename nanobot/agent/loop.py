@@ -16,6 +16,7 @@ from loguru import logger
 from nanobot.agent.context import ContextBuilder
 from nanobot.agent.hook import AgentHook, AgentHookContext
 from nanobot.agent.memory import MemoryConsolidator
+from nanobot.agent.memory_rag import VectorMemoryStore
 from nanobot.agent.runner import AgentRunSpec, AgentRunner
 from nanobot.agent.subagent import SubagentManager
 from nanobot.agent.tools.cron import CronTool
@@ -124,9 +125,45 @@ class AgentLoop:
             get_tool_definitions=self.tools.get_definitions,
             max_completion_tokens=provider.generation.max_tokens,
         )
+        self.rag: VectorMemoryStore | None = None
         self._register_default_tools()
         self.commands = CommandRouter()
         register_builtin_commands(self.commands)
+
+    def init_rag(self, rag_config: Any = None) -> None:
+        """Initialize RAG memory store from config. Call after __init__."""
+        if rag_config is None or not getattr(rag_config, "enabled", False):
+            return
+        try:
+            self.rag = VectorMemoryStore(
+                qdrant_url=rag_config.qdrant_url,
+                collection=rag_config.collection,
+                embedding_model=rag_config.embedding_model,
+                rerank_model=rag_config.rerank_model,
+                rerank_top_k=rag_config.rerank_top_k,
+                score_threshold=rag_config.score_threshold,
+                api_key=rag_config.api_key,
+                api_base=rag_config.api_base,
+            )
+            logger.info("RAG memory enabled: {} @ {}", rag_config.collection, rag_config.qdrant_url)
+        except Exception:
+            logger.warning("RAG: failed to initialize vector memory store")
+
+    def _get_rag_context(self, query: str) -> str:
+        """Synchronously retrieve RAG context."""
+        if self.rag is None:
+            return ""
+        try:
+            loop = asyncio.get_running_loop()
+            results = loop.run_until_complete(self.rag.retrieve(query))
+        except RuntimeError:
+            results = []
+        if not results:
+            return ""
+        lines = []
+        for r in results:
+            lines.append(f"- [score={r["score"]:.3f}] {r["text"]}")
+        return "## Relevant Memories (RAG)\n\n" + "\n".join(lines)
 
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
@@ -449,12 +486,15 @@ class AgentLoop:
                 message_tool.start_turn()
 
         history = session.get_history(max_messages=0)
+        rag_context = self._get_rag_context(msg.content)
         initial_messages = self.context.build_messages(
             history=history,
             current_message=msg.content,
             media=msg.media if msg.media else None,
             channel=msg.channel, chat_id=msg.chat_id,
         )
+        if rag_context:
+            initial_messages[0]["content"] += "\n\n---\n\n" + rag_context
 
         async def _bus_progress(content: str, *, tool_hint: bool = False) -> None:
             meta = dict(msg.metadata or {})
