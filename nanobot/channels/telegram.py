@@ -485,9 +485,11 @@ class TelegramChannel(BaseChannel):
 
     async def send_delta(self, chat_id: str, delta: str, metadata: dict[str, Any] | None = None) -> None:
         """Progressive message editing: send on first delta, edit on subsequent ones."""
+        meta = metadata or {}
+        if not meta.get("_stream_end"):
+            logger.info("SEND_DELTA_DEBUG: chat_id={}, thread_id={}, message_id={}, keys={}", chat_id, meta.get("message_thread_id"), meta.get("message_id"), list(meta.keys()))
         if not self._app:
             return
-        meta = metadata or {}
         int_chat_id = int(chat_id)
         stream_id = meta.get("_stream_id")
 
@@ -541,9 +543,17 @@ class TelegramChannel(BaseChannel):
         now = time.monotonic()
         if buf.message_id is None:
             try:
+                send_kwargs = {"chat_id": int_chat_id, "text": buf.text}
+                thread_id = meta.get("message_thread_id")
+                if thread_id is None:
+                    reply_msg_id = meta.get("message_id")
+                    if reply_msg_id is not None:
+                        thread_id = self._message_threads.get((chat_id, reply_msg_id))
+                if thread_id is not None:
+                    send_kwargs["message_thread_id"] = thread_id
                 sent = await self._call_with_retry(
                     self._app.bot.send_message,
-                    chat_id=int_chat_id, text=buf.text,
+                    **send_kwargs,
                 )
                 buf.message_id = sent.message_id
                 buf.last_edit = now
@@ -825,6 +835,7 @@ class TelegramChannel(BaseChannel):
         logger.debug("Telegram message from {}: {}...", sender_id, content[:50])
 
         str_chat_id = str(chat_id)
+        logger.info("THREAD_DEBUG: chat_id={}, thread_id={}, is_forum={}, is_group={}", str_chat_id, getattr(message, "message_thread_id", None), getattr(message.chat, "is_forum", False), message.chat.type != "private")
         metadata = self._build_message_metadata(message, user)
         session_key = self._derive_topic_session_key(message)
 
