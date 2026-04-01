@@ -375,7 +375,7 @@ class TelegramChannel(BaseChannel):
 
         # Only stop typing indicator for final responses
         if not msg.metadata.get("_progress", False):
-            self._stop_typing(msg.chat_id)
+            self._stop_typing(msg.chat_id, msg.metadata.get("message_thread_id"))
 
         try:
             chat_id = int(msg.chat_id)
@@ -523,7 +523,7 @@ class TelegramChannel(BaseChannel):
                 return
             if stream_id is not None and buf.stream_id is not None and buf.stream_id != stream_id:
                 return
-            self._stop_typing(chat_id)
+            self._stop_typing(chat_id, meta.get("message_thread_id"))
             try:
                 html = _markdown_to_telegram_html(buf.text)
                 await self._call_with_retry(
