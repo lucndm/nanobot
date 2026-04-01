@@ -15,8 +15,13 @@ class ToolRegistry:
     def __init__(self):
         self._tools: dict[str, Tool] = {}
 
-    def register(self, tool: Tool) -> None:
+    def register(self, tool: Tool, agent_loop=None) -> None:
         """Register a tool."""
+        # Set agent_loop reference if provided or if registry has it
+        if agent_loop is not None:
+            tool.agent_loop = agent_loop
+        elif hasattr(self, '_agent_loop') and self._agent_loop is not None:
+            tool.agent_loop = self._agent_loop
         self._tools[tool.name] = tool
 
     def unregister(self, name: str) -> None:
