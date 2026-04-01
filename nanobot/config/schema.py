@@ -169,6 +169,14 @@ class ToolsConfig(Base):
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
 
 
+class OtelConfig(Base):
+    """OpenTelemetry configuration."""
+
+    enabled: bool = False
+    endpoint: str = "http://100.68.251.84:4317"
+    service_name: str = "nanobot"
+
+
 class Config(BaseSettings):
     """Root configuration for nanobot."""
 
@@ -177,6 +185,7 @@ class Config(BaseSettings):
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    otel: OtelConfig = Field(default_factory=OtelConfig)
 
     @property
     def workspace_path(self) -> Path:

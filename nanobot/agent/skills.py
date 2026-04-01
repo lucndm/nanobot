@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 from pathlib import Path
+from typing import Callable
 
 # Default builtin skills directory (relative to this file)
 BUILTIN_SKILLS_DIR = Path(__file__).parent.parent / "skills"
@@ -41,7 +42,9 @@ class SkillsLoader:
                 if skill_dir.is_dir():
                     skill_file = skill_dir / "SKILL.md"
                     if skill_file.exists():
-                        skills.append({"name": skill_dir.name, "path": str(skill_file), "source": "workspace"})
+                        skills.append(
+                            {"name": skill_dir.name, "path": str(skill_file), "source": "workspace"}
+                        )
 
         # Built-in skills
         if self.builtin_skills and self.builtin_skills.exists():
@@ -49,7 +52,9 @@ class SkillsLoader:
                 if skill_dir.is_dir():
                     skill_file = skill_dir / "SKILL.md"
                     if skill_file.exists() and not any(s["name"] == skill_dir.name for s in skills):
-                        skills.append({"name": skill_dir.name, "path": str(skill_file), "source": "builtin"})
+                        skills.append(
+                            {"name": skill_dir.name, "path": str(skill_file), "source": "builtin"}
+                        )
 
         # Filter by requirements
         if filter_unavailable:
@@ -79,22 +84,32 @@ class SkillsLoader:
 
         return None
 
-    def load_skills_for_context(self, skill_names: list[str]) -> str:
+    def load_skills_for_context(
+        self,
+        skill_names: list[str],
+        on_skills_loaded: Callable[[list[str]], None] | None = None,
+    ) -> str:
         """
         Load specific skills for inclusion in agent context.
 
         Args:
             skill_names: List of skill names to load.
+            on_skills_loaded: Optional callback fired with successfully loaded skill names.
 
         Returns:
             Formatted skills content.
         """
         parts = []
+        loaded: list[str] = []
         for name in skill_names:
             content = self.load_skill(name)
             if content:
                 content = self._strip_frontmatter(content)
                 parts.append(f"### Skill: {name}\n\n{content}")
+                loaded.append(name)
+
+        if on_skills_loaded and loaded:
+            on_skills_loaded(loaded)
 
         return "\n\n---\n\n".join(parts) if parts else ""
 
@@ -123,7 +138,7 @@ class SkillsLoader:
             skill_meta = self._get_skill_meta(s["name"])
             available = self._check_requirements(skill_meta)
 
-            lines.append(f"  <skill available=\"{str(available).lower()}\">")
+            lines.append(f'  <skill available="{str(available).lower()}">')
             lines.append(f"    <name>{name}</name>")
             lines.append(f"    <description>{desc}</description>")
             lines.append(f"    <location>{path}</location>")
@@ -163,7 +178,7 @@ class SkillsLoader:
         if content.startswith("---"):
             match = re.match(r"^---\n.*?\n---\n", content, re.DOTALL)
             if match:
-                return content[match.end():].strip()
+                return content[match.end() :].strip()
         return content
 
     def _parse_nanobot_metadata(self, raw: str) -> dict:
@@ -222,7 +237,7 @@ class SkillsLoader:
                 for line in match.group(1).split("\n"):
                     if ":" in line:
                         key, value = line.split(":", 1)
-                        metadata[key.strip()] = value.strip().strip('"\'')
+                        metadata[key.strip()] = value.strip().strip("\"'")
                 return metadata
 
         return None
