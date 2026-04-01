@@ -9,7 +9,9 @@ import pytest
 try:
     import telegram  # noqa: F401
 except ImportError:
-    pytest.skip("Telegram dependencies not installed (python-telegram-bot)", allow_module_level=True)
+    pytest.skip(
+        "Telegram dependencies not installed (python-telegram-bot)", allow_module_level=True
+    )
 
 from nanobot.bus.events import OutboundMessage
 from nanobot.bus.queue import MessageBus
@@ -71,8 +73,10 @@ class _FakeBot:
 
     async def get_file(self, file_id: str):
         """Return a fake file that 'downloads' to a path (for reply-to-media tests)."""
+
         async def _fake_download(path) -> None:
             pass
+
         return SimpleNamespace(download_to_drive=_fake_download)
 
 
@@ -241,6 +245,7 @@ async def test_send_text_retries_on_timeout() -> None:
     channel._app.bot.send_message = flaky_send
 
     import nanobot.channels.telegram as tg_mod
+
     orig_delay = tg_mod._SEND_RETRY_BASE_DELAY
     tg_mod._SEND_RETRY_BASE_DELAY = 0.01
     try:
@@ -269,6 +274,7 @@ async def test_send_text_gives_up_after_max_retries() -> None:
     channel._app.bot.send_message = always_timeout
 
     import nanobot.channels.telegram as tg_mod
+
     orig_delay = tg_mod._SEND_RETRY_BASE_DELAY
     tg_mod._SEND_RETRY_BASE_DELAY = 0.01
     try:
@@ -351,8 +357,12 @@ async def test_send_delta_stream_end_treats_not_modified_as_success() -> None:
         MessageBus(),
     )
     channel._app = _FakeApp(lambda: None)
-    channel._app.bot.edit_message_text = AsyncMock(side_effect=BadRequest("Message is not modified"))
-    channel._stream_bufs["123"] = _StreamBuf(text="hello", message_id=7, last_edit=0.0, stream_id="s:0")
+    channel._app.bot.edit_message_text = AsyncMock(
+        side_effect=BadRequest("Message is not modified")
+    )
+    channel._stream_bufs["123"] = _StreamBuf(
+        text="hello", message_id=7, last_edit=0.0, stream_id="s:0"
+    )
 
     await channel.send_delta("123", "", {"_stream_end": True, "_stream_id": "s:0"})
 
@@ -390,8 +400,12 @@ async def test_send_delta_incremental_edit_treats_not_modified_as_success() -> N
         MessageBus(),
     )
     channel._app = _FakeApp(lambda: None)
-    channel._stream_bufs["123"] = _StreamBuf(text="hello", message_id=7, last_edit=0.0, stream_id="s:0")
-    channel._app.bot.edit_message_text = AsyncMock(side_effect=BadRequest("Message is not modified"))
+    channel._stream_bufs["123"] = _StreamBuf(
+        text="hello", message_id=7, last_edit=0.0, stream_id="s:0"
+    )
+    channel._app.bot.edit_message_text = AsyncMock(
+        side_effect=BadRequest("Message is not modified")
+    )
 
     await channel.send_delta("123", "", {"_stream_delta": True, "_stream_id": "s:0"})
 
@@ -420,7 +434,9 @@ def test_telegram_group_policy_defaults_to_mention() -> None:
 
 
 def test_is_allowed_accepts_legacy_telegram_id_username_formats() -> None:
-    channel = TelegramChannel(TelegramConfig(allow_from=["12345", "alice", "67890|bob"]), MessageBus())
+    channel = TelegramChannel(
+        TelegramConfig(allow_from=["12345", "alice", "67890|bob"]), MessageBus()
+    )
 
     assert channel.is_allowed("12345|carol") is True
     assert channel.is_allowed("99999|alice") is True
@@ -545,7 +561,7 @@ async def test_group_policy_mention_ignores_unmentioned_group_message() -> None:
         handled.append(kwargs)
 
     channel._handle_message = capture_handle
-    channel._start_typing = lambda _chat_id: None
+    channel._start_typing = lambda _chat_id, _tid=None: None
 
     await channel._on_message(_make_telegram_update(text="hello everyone"), None)
 
@@ -567,11 +583,15 @@ async def test_group_policy_mention_accepts_text_mention_and_caches_bot_identity
         handled.append(kwargs)
 
     channel._handle_message = capture_handle
-    channel._start_typing = lambda _chat_id: None
+    channel._start_typing = lambda _chat_id, _tid=None: None
 
     mention = SimpleNamespace(type="mention", offset=0, length=13)
-    await channel._on_message(_make_telegram_update(text="@nanobot_test hi", entities=[mention]), None)
-    await channel._on_message(_make_telegram_update(text="@nanobot_test again", entities=[mention]), None)
+    await channel._on_message(
+        _make_telegram_update(text="@nanobot_test hi", entities=[mention]), None
+    )
+    await channel._on_message(
+        _make_telegram_update(text="@nanobot_test again", entities=[mention]), None
+    )
 
     assert len(handled) == 2
     assert channel._app.bot.get_me_calls == 1
@@ -591,7 +611,7 @@ async def test_group_policy_mention_accepts_caption_mention() -> None:
         handled.append(kwargs)
 
     channel._handle_message = capture_handle
-    channel._start_typing = lambda _chat_id: None
+    channel._start_typing = lambda _chat_id, _tid=None: None
 
     mention = SimpleNamespace(type="mention", offset=0, length=13)
     await channel._on_message(
@@ -617,7 +637,7 @@ async def test_group_policy_mention_accepts_reply_to_bot() -> None:
         handled.append(kwargs)
 
     channel._handle_message = capture_handle
-    channel._start_typing = lambda _chat_id: None
+    channel._start_typing = lambda _chat_id, _tid=None: None
 
     reply = SimpleNamespace(from_user=SimpleNamespace(id=999))
     await channel._on_message(_make_telegram_update(text="reply", reply_to_message=reply), None)
@@ -639,7 +659,7 @@ async def test_group_policy_open_accepts_plain_group_message() -> None:
         handled.append(kwargs)
 
     channel._handle_message = capture_handle
-    channel._start_typing = lambda _chat_id: None
+    channel._start_typing = lambda _chat_id, _tid=None: None
 
     await channel._on_message(_make_telegram_update(text="hello group"), None)
 
@@ -695,10 +715,12 @@ async def test_on_message_includes_reply_context() -> None:
     )
     channel._app = _FakeApp(lambda: None)
     handled = []
+
     async def capture_handle(**kwargs) -> None:
         handled.append(kwargs)
+
     channel._handle_message = capture_handle
-    channel._start_typing = lambda _chat_id: None
+    channel._start_typing = lambda _chat_id, _tid=None: None
 
     reply = SimpleNamespace(text="Hello", message_id=2, from_user=SimpleNamespace(id=1))
     update = _make_telegram_update(text="translate this", reply_to_message=reply)
@@ -767,9 +789,7 @@ async def test_download_message_media_uses_file_unique_id_when_available(
         MessageBus(),
     )
     app = _FakeApp(lambda: None)
-    app.bot.get_file = AsyncMock(
-        return_value=SimpleNamespace(download_to_drive=_download_to_drive)
-    )
+    app.bot.get_file = AsyncMock(return_value=SimpleNamespace(download_to_drive=_download_to_drive))
     channel._app = app
 
     msg = SimpleNamespace(
@@ -816,10 +836,12 @@ async def test_on_message_attaches_reply_to_media_when_available(monkeypatch, tm
     )
     channel._app = app
     handled = []
+
     async def capture_handle(**kwargs) -> None:
         handled.append(kwargs)
+
     channel._handle_message = capture_handle
-    channel._start_typing = lambda _chat_id: None
+    channel._start_typing = lambda _chat_id, _tid=None: None
 
     reply_with_photo = SimpleNamespace(
         text=None,
@@ -855,10 +877,12 @@ async def test_on_message_reply_to_media_fallback_when_download_fails() -> None:
     channel._app = _FakeApp(lambda: None)
     channel._app.bot.get_file = None
     handled = []
+
     async def capture_handle(**kwargs) -> None:
         handled.append(kwargs)
+
     channel._handle_message = capture_handle
-    channel._start_typing = lambda _chat_id: None
+    channel._start_typing = lambda _chat_id, _tid=None: None
 
     reply_with_photo = SimpleNamespace(
         text=None,
@@ -899,10 +923,12 @@ async def test_on_message_reply_to_caption_and_media(monkeypatch, tmp_path) -> N
     )
     channel._app = app
     handled = []
+
     async def capture_handle(**kwargs) -> None:
         handled.append(kwargs)
+
     channel._handle_message = capture_handle
-    channel._start_typing = lambda _chat_id: None
+    channel._start_typing = lambda _chat_id, _tid=None: None
 
     reply_with_caption_and_photo = SimpleNamespace(
         text=None,
@@ -937,8 +963,10 @@ async def test_forward_command_does_not_inject_reply_context() -> None:
     )
     channel._app = _FakeApp(lambda: None)
     handled = []
+
     async def capture_handle(**kwargs) -> None:
         handled.append(kwargs)
+
     channel._handle_message = capture_handle
 
     reply = SimpleNamespace(text="some old message", message_id=2, from_user=SimpleNamespace(id=1))
