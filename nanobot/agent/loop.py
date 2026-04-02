@@ -312,6 +312,7 @@ class AgentLoop:
                 max_iterations=self.max_iterations,
                 hook=hook,
                 error_message="Sorry, I encountered an error calling the AI model.",
+                channel=channel,
                 concurrent_tools=True,
             )
         )

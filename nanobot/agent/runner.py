@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass, field
 from typing import Any
+
+from loguru import logger
 
 from nanobot.agent.hook import AgentHook, AgentHookContext
 from nanobot.agent.tools.registry import ToolRegistry
@@ -32,6 +35,7 @@ class AgentRunSpec:
     hook: AgentHook | None = None
     error_message: str | None = _DEFAULT_ERROR_MESSAGE
     max_iterations_message: str | None = None
+    channel: str = ""
     concurrent_tools: bool = False
     fail_on_tool_error: bool = False
 
@@ -54,6 +58,74 @@ class AgentRunner:
 
     def __init__(self, provider: LLMProvider):
         self.provider = provider
+        self._llm_duration: Any = None
+        self._llm_prompt_tokens: Any = None
+        self._llm_completion_tokens: Any = None
+        self._llm_errors: Any = None
+        self._init_llm_metrics()
+
+    def _init_llm_metrics(self) -> None:
+        try:
+            from nanobot.observability.otel import get_meter
+
+            meter = get_meter()
+            if meter:
+                self._llm_duration = meter.create_histogram(
+                    "nanobot.llm.request.duration",
+                    description="LLM request duration in milliseconds",
+                    unit="ms",
+                )
+                self._llm_prompt_tokens = meter.create_counter(
+                    "nanobot.llm.tokens.prompt",
+                    description="LLM prompt tokens consumed",
+                    unit="tokens",
+                )
+                self._llm_completion_tokens = meter.create_counter(
+                    "nanobot.llm.tokens.completion",
+                    description="LLM completion tokens consumed",
+                    unit="tokens",
+                )
+                self._llm_errors = meter.create_counter(
+                    "nanobot.llm.errors",
+                    description="LLM request errors",
+                )
+        except Exception:
+            logger.debug("OTEL: failed to initialize LLM metrics")
+
+    def _record_llm_metrics(
+        self, spec: AgentRunSpec, duration_ms: float, usage: dict[str, int]
+    ) -> None:
+        attrs = {"model": spec.model, "channel": spec.channel}
+        try:
+            if self._llm_duration:
+                self._llm_duration.record(duration_ms, attributes=attrs)
+        except Exception:
+            logger.debug("OTEL: failed to record llm duration")
+        try:
+            if self._llm_prompt_tokens:
+                self._llm_prompt_tokens.add(
+                    usage.get("prompt_tokens", 0), attributes={**attrs, "type": "prompt"}
+                )
+        except Exception:
+            logger.debug("OTEL: failed to record prompt tokens")
+        try:
+            if self._llm_completion_tokens:
+                self._llm_completion_tokens.add(
+                    usage.get("completion_tokens", 0), attributes={**attrs, "type": "completion"}
+                )
+        except Exception:
+            logger.debug("OTEL: failed to record completion tokens")
+
+    def _record_llm_error(self, spec: AgentRunSpec, error_type: str) -> None:
+        try:
+            if self._llm_errors:
+                self._llm_errors.add(1, attributes={
+                    "model": spec.model,
+                    "channel": spec.channel,
+                    "error_type": error_type,
+                })
+        except Exception:
+            logger.debug("OTEL: failed to record llm error")
 
     async def run(self, spec: AgentRunSpec) -> AgentRunResult:
         hook = spec.hook or AgentHook()
@@ -80,22 +152,31 @@ class AgentRunner:
             if spec.reasoning_effort is not None:
                 kwargs["reasoning_effort"] = spec.reasoning_effort
 
-            if hook.wants_streaming():
-                async def _stream(delta: str) -> None:
-                    await hook.on_stream(context, delta)
+            start = time.monotonic()
+            try:
+                if hook.wants_streaming():
+                    async def _stream(delta: str) -> None:
+                        await hook.on_stream(context, delta)
 
-                response = await self.provider.chat_stream_with_retry(
-                    **kwargs,
-                    on_content_delta=_stream,
-                )
+                    response = await self.provider.chat_stream_with_retry(
+                        **kwargs,
+                        on_content_delta=_stream,
+                    )
+                else:
+                    response = await self.provider.chat_with_retry(**kwargs)
+            except Exception as exc:
+                duration_ms = (time.monotonic() - start) * 1000
+                self._record_llm_error(spec, type(exc).__name__)
+                raise
             else:
-                response = await self.provider.chat_with_retry(**kwargs)
+                duration_ms = (time.monotonic() - start) * 1000
 
             raw_usage = response.usage or {}
             usage = {
                 "prompt_tokens": int(raw_usage.get("prompt_tokens", 0) or 0),
                 "completion_tokens": int(raw_usage.get("completion_tokens", 0) or 0),
             }
+            self._record_llm_metrics(spec, duration_ms, usage)
             context.response = response
             context.usage = usage
             context.tool_calls = list(response.tool_calls)
