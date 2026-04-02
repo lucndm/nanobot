@@ -10,6 +10,7 @@ from loguru import logger
 
 from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.bus.queue import MessageBus
+from nanobot.observability.otel import get_meter
 
 
 class BaseChannel(ABC):
@@ -35,6 +36,17 @@ class BaseChannel(ABC):
         self.config = config
         self.bus = bus
         self._running = False
+
+        # Observability: channel message counter
+        meter = get_meter()
+        if meter:
+            self._msg_counter = meter.create_counter(
+                "nanobot.channel.messages",
+                description="Number of messages processed by channel",
+                unit="1",
+            )
+        else:
+            self._msg_counter = None
 
     async def transcribe_audio(self, file_path: str | Path) -> str:
         """Transcribe an audio file via Groq Whisper. Returns empty string on failure."""
@@ -163,6 +175,11 @@ class BaseChannel(ABC):
             metadata=meta,
             session_key_override=session_key,
         )
+
+        if self._msg_counter:
+            self._msg_counter.add(
+                1, attributes={"channel": self.name, "direction": "inbound"}
+            )
 
         await self.bus.publish_inbound(msg)
 

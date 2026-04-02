@@ -21,6 +21,7 @@ from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
 from nanobot.config.paths import get_media_dir
 from nanobot.config.schema import Base
+from nanobot.observability.otel import get_meter
 from nanobot.security.network import validate_url_target
 from nanobot.utils.helpers import split_message
 
@@ -228,6 +229,23 @@ class TelegramChannel(BaseChannel):
         self._bot_username: str | None = None
         self._stream_bufs: dict[str, _StreamBuf] = {}  # chat_id -> streaming state
 
+        # Observability: send duration histogram + error counter
+        meter = get_meter()
+        if meter:
+            self._send_duration = meter.create_histogram(
+                "nanobot.channel.send.duration",
+                description="Duration of channel send operations",
+                unit="ms",
+            )
+            self._send_errors = meter.create_counter(
+                "nanobot.channel.send.errors",
+                description="Number of send errors by channel",
+                unit="1",
+            )
+        else:
+            self._send_duration = None
+            self._send_errors = None
+
     def is_allowed(self, sender_id: str) -> bool:
         """Preserve Telegram's legacy id|username allowlist matching."""
         if super().is_allowed(sender_id):
@@ -370,6 +388,8 @@ class TelegramChannel(BaseChannel):
 
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message through Telegram."""
+        send_start = time.monotonic()
+
         if not self._app:
             logger.warning("Telegram bot not running")
             return
@@ -449,7 +469,16 @@ class TelegramChannel(BaseChannel):
         # Send text content
         if msg.content and msg.content != "[empty message]":
             for chunk in split_message(msg.content, TELEGRAM_MAX_MESSAGE_LEN):
+                if self._msg_counter:
+                    self._msg_counter.add(
+                        1, attributes={"channel": self.name, "direction": "outbound"}
+                    )
                 await self._send_text(chat_id, chunk, reply_params, thread_kwargs)
+
+        # Record send duration
+        elapsed_ms = (time.monotonic() - send_start) * 1000
+        if self._send_duration:
+            self._send_duration.record(elapsed_ms, attributes={"channel": self.name})
 
     async def _call_with_retry(self, fn, *args, **kwargs):
         """Call an async Telegram API function with retry on pool/network timeout."""
@@ -498,6 +527,14 @@ class TelegramChannel(BaseChannel):
                 )
             except Exception as e2:
                 logger.error("Error sending Telegram message: {}", e2)
+                if self._send_errors:
+                    self._send_errors.add(
+                        1,
+                        attributes={
+                            "channel": self.name,
+                            "error_type": type(e2).__name__,
+                        },
+                    )
                 raise
 
     @staticmethod
