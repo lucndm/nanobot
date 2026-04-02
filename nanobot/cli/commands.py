@@ -719,14 +719,26 @@ def gateway(
 
     console.print(f"[green]✓[/green] Heartbeat: every {hb_cfg.interval_s}s")
 
+    # Webhook server (optional, for receiving external callbacks)
+    webhook_server = None
+    if config.gateway.webhook.enabled:
+        from nanobot.gateway.webhook import WebhookServer
+
+        webhook_server = WebhookServer(
+            agent=agent,
+            port=config.gateway.webhook.port,
+            secret=config.gateway.webhook.secret,
+        )
+        console.print(f"[green]✓[/green] Webhook: port {config.gateway.webhook.port}")
+
     async def run():
         try:
             await cron.start()
             await heartbeat.start()
-            await asyncio.gather(
-                agent.run(),
-                channels.start_all(),
-            )
+            tasks = [agent.run(), channels.start_all()]
+            if webhook_server:
+                tasks.append(webhook_server.start())
+            await asyncio.gather(*tasks)
         except KeyboardInterrupt:
             console.print("\nShutting down...")
         except Exception:
