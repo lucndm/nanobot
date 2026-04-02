@@ -111,12 +111,21 @@ class HeartbeatConfig(Base):
     keep_recent_messages: int = 8
 
 
+class WebhookConfig(Base):
+    """Webhook HTTP listener configuration."""
+
+    enabled: bool = False
+    port: int = 8080
+    secret: str = ""  # Optional shared secret for request validation
+
+
 class GatewayConfig(Base):
-    """Gateway/server configuration."""
+    """Gateway configuration."""
 
     host: str = "0.0.0.0"
     port: int = 18790
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
+    webhook: WebhookConfig = Field(default_factory=WebhookConfig)
 
 
 class WebSearchConfig(Base):
