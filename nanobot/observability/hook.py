@@ -165,9 +165,9 @@ class OTelHook(AgentHook):
         """Record a skill activation event."""
         try:
             if self._skill_counter:
-                self._skill_counter.add(
-                    1,
-                    attributes={"skill_name": skill_name, "channel": self._channel},
-                )
+                attrs = {"skill_name": skill_name, "channel": self._channel}
+                if self._topic_name:
+                    attrs["topic_name"] = self._topic_name
+                self._skill_counter.add(1, attributes=attrs)
         except Exception:
             logger.debug("OTEL: failed to record skill metric")

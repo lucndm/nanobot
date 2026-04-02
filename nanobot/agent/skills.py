@@ -1,11 +1,17 @@
 """Skills loader for agent capabilities."""
 
+from __future__ import annotations
+
 import json
 import os
 import re
 import shutil
+import time
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
+
+if TYPE_CHECKING:
+    from opentelemetry.metrics import Counter, Histogram
 
 # Default builtin skills directory (relative to this file)
 BUILTIN_SKILLS_DIR = Path(__file__).parent.parent / "skills"
@@ -23,6 +29,11 @@ class SkillsLoader:
         self.workspace = workspace
         self.workspace_skills = workspace / "skills"
         self.builtin_skills = builtin_skills_dir or BUILTIN_SKILLS_DIR
+
+        # OTel skill metrics (lazily initialized)
+        self._skill_duration: Histogram | None = None
+        self._skill_errors: Counter | None = None
+        self._otel_initialized = False
 
     def list_skills(self, filter_unavailable: bool = True) -> list[dict[str, str]]:
         """
@@ -61,6 +72,28 @@ class SkillsLoader:
             return [s for s in skills if self._check_requirements(self._get_skill_meta(s["name"]))]
         return skills
 
+    def _init_otel(self) -> None:
+        """Lazily initialize OTel metrics for skills."""
+        if self._otel_initialized:
+            return
+        self._otel_initialized = True
+        try:
+            from nanobot.observability.otel import get_meter
+
+            meter = get_meter()
+            if meter:
+                self._skill_duration = meter.create_histogram(
+                    "nanobot.skill.duration",
+                    description="Skill loading duration in ms",
+                    unit="ms",
+                )
+                self._skill_errors = meter.create_counter(
+                    "nanobot.skill.errors",
+                    description="Number of skill loading errors",
+                )
+        except Exception:
+            pass  # OTel not available — metrics silently disabled
+
     def load_skill(self, name: str) -> str | None:
         """
         Load a skill by name.
@@ -71,18 +104,36 @@ class SkillsLoader:
         Returns:
             Skill content or None if not found.
         """
-        # Check workspace first
-        workspace_skill = self.workspace_skills / name / "SKILL.md"
-        if workspace_skill.exists():
-            return workspace_skill.read_text(encoding="utf-8")
+        self._init_otel()
+        start = time.monotonic()
 
-        # Check built-in
-        if self.builtin_skills:
-            builtin_skill = self.builtin_skills / name / "SKILL.md"
-            if builtin_skill.exists():
-                return builtin_skill.read_text(encoding="utf-8")
+        try:
+            # Check workspace first
+            workspace_skill = self.workspace_skills / name / "SKILL.md"
+            if workspace_skill.exists():
+                return workspace_skill.read_text(encoding="utf-8")
 
-        return None
+            # Check built-in
+            if self.builtin_skills:
+                builtin_skill = self.builtin_skills / name / "SKILL.md"
+                if builtin_skill.exists():
+                    return builtin_skill.read_text(encoding="utf-8")
+
+            return None
+        except Exception:
+            if self._skill_errors:
+                try:
+                    self._skill_errors.add(1, attributes={"skill_name": name})
+                except Exception:
+                    pass
+            raise
+        finally:
+            duration_ms = (time.monotonic() - start) * 1000
+            if self._skill_duration:
+                try:
+                    self._skill_duration.record(duration_ms, attributes={"skill_name": name})
+                except Exception:
+                    pass
 
     def load_skills_for_context(
         self,
