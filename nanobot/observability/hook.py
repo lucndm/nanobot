@@ -22,11 +22,12 @@ class OTelHook(AgentHook):
     - All OTEL calls wrapped in try/except to never crash the agent.
     """
 
-    def __init__(self, channel: str = "unknown", chat_id: str = "unknown") -> None:
+    def __init__(self, channel: str = "unknown", chat_id: str = "unknown", topic_name: str | None = None) -> None:
         from nanobot.observability.otel import get_meter, get_tracer
 
         self._channel = channel
         self._chat_id = chat_id
+        self._topic_name = topic_name
         self._current_span: Span | None = None
         self._tool_start_times: dict[str, float] = {}
         self._tools_in_session: set[str] = set()
@@ -85,13 +86,16 @@ class OTelHook(AgentHook):
     async def before_iteration(self, context: AgentHookContext) -> None:
         try:
             if self._tracer:
+                attrs = {
+                    "channel": self._channel,
+                    "chat_id": self._chat_id,
+                    "iteration": context.iteration,
+                }
+                if self._topic_name:
+                    attrs["topic_name"] = self._topic_name
                 self._current_span = self._tracer.start_span(
                     "agent.iteration",
-                    attributes={
-                        "channel": self._channel,
-                        "chat_id": self._chat_id,
-                        "iteration": context.iteration,
-                    },
+                    attributes=attrs,
                 )
                 self._current_span.__enter__()
         except Exception:
@@ -112,6 +116,8 @@ class OTelHook(AgentHook):
                     "status": event.get("status", "unknown"),
                     "channel": self._channel,
                 }
+                if self._topic_name:
+                    attrs["topic_name"] = self._topic_name
                 if self._tool_calls_counter:
                     self._tool_calls_counter.add(1, attributes=attrs)
 
@@ -136,13 +142,13 @@ class OTelHook(AgentHook):
 
         try:
             if self._iteration_counter:
-                self._iteration_counter.add(
-                    1,
-                    attributes={
-                        "channel": self._channel,
-                        "stop_reason": context.stop_reason or "unknown",
-                    },
-                )
+                attrs = {
+                    "channel": self._channel,
+                    "stop_reason": context.stop_reason or "unknown",
+                }
+                if self._topic_name:
+                    attrs["topic_name"] = self._topic_name
+                self._iteration_counter.add(1, attributes=attrs)
         except Exception:
             logger.debug("OTEL: failed to record iteration")
 

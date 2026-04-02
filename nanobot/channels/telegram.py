@@ -223,6 +223,7 @@ class TelegramChannel(BaseChannel):
         self._media_group_buffers: dict[str, dict] = {}
         self._media_group_tasks: dict[str, asyncio.Task] = {}
         self._message_threads: dict[tuple[str, int], int] = {}
+        self._topic_names: dict[int, str] = {}  # thread_id -> topic name
         self._bot_user_id: int | None = None
         self._bot_username: str | None = None
         self._stream_bufs: dict[str, _StreamBuf] = {}  # chat_id -> streaming state
@@ -648,16 +649,47 @@ class TelegramChannel(BaseChannel):
     def _build_message_metadata(message, user) -> dict:
         """Build common Telegram inbound metadata payload."""
         reply_to = getattr(message, "reply_to_message", None)
+        thread_id = getattr(message, "message_thread_id", None)
         return {
             "message_id": message.message_id,
             "user_id": user.id,
             "username": user.username,
             "first_name": user.first_name,
             "is_group": message.chat.type != "private",
-            "message_thread_id": getattr(message, "message_thread_id", None),
+            "message_thread_id": thread_id,
             "is_forum": bool(getattr(message.chat, "is_forum", False)),
             "reply_to_message_id": getattr(reply_to, "message_id", None) if reply_to else None,
         }
+
+    def _resolve_topic_name(self, message) -> str | None:
+        """Resolve topic name from cache or message. Returns name or None."""
+        thread_id = getattr(message, "message_thread_id", None)
+        if not thread_id or message.chat.type == "private":
+            return None
+        if thread_id in self._topic_names:
+            return self._topic_names[thread_id]
+        # Try forum_topic_created event
+        forum_topic = getattr(message, "forum_topic_created", None)
+        if forum_topic and getattr(forum_topic, "name", ""):
+            self._topic_names[thread_id] = forum_topic.name
+            return forum_topic.name
+        return None
+
+    async def _fetch_topic_name(self, chat_id: int, thread_id: int) -> str | None:
+        """Resolve topic name via Telegram API and cache it."""
+        if thread_id in self._topic_names:
+            return self._topic_names[thread_id]
+        try:
+            bot = self._app.bot if self._app else None
+            if not bot:
+                return None
+            topic_info = await bot.get_forum_topic(chat_id=chat_id, message_thread_id=thread_id)
+            if topic_info and hasattr(topic_info, "name"):
+                self._topic_names[thread_id] = topic_info.name
+                return topic_info.name
+        except Exception:
+            pass
+        return None
 
     @staticmethod
     def _extract_reply_context(message) -> str | None:
@@ -805,11 +837,21 @@ class TelegramChannel(BaseChannel):
         message = update.message
         user = update.effective_user
         self._remember_thread_context(message)
+        meta = self._build_message_metadata(message, user)
+        topic_name = self._resolve_topic_name(message)
+        if topic_name:
+            meta["topic_name"] = topic_name
+        elif meta.get("message_thread_id"):
+            # Try async API fetch for uncached topics
+            fetched = await self._fetch_topic_name(message.chat_id, meta["message_thread_id"])
+            if fetched:
+                meta["topic_name"] = fetched
+
         await self._handle_message(
             sender_id=self._sender_id(user),
             chat_id=str(message.chat_id),
             content=message.text or "",
-            metadata=self._build_message_metadata(message, user),
+            metadata=meta,
             session_key=self._derive_topic_session_key(message),
         )
 
@@ -875,6 +917,13 @@ class TelegramChannel(BaseChannel):
             message.chat.type != "private",
         )
         metadata = self._build_message_metadata(message, user)
+        topic_name = self._resolve_topic_name(message)
+        if topic_name:
+            metadata["topic_name"] = topic_name
+        elif metadata.get("message_thread_id"):
+            fetched = await self._fetch_topic_name(message.chat_id, metadata["message_thread_id"])
+            if fetched:
+                metadata["topic_name"] = fetched
         session_key = self._derive_topic_session_key(message)
 
         # Telegram media groups: buffer briefly, forward as one aggregated turn.

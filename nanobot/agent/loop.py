@@ -238,6 +238,7 @@ class AgentLoop:
         chat_id: str = "direct",
         message_id: str | None = None,
         message_thread_id: int | None = None,
+        topic_name: str | None = None,
     ) -> tuple[str | None, list[str], list[dict]]:
         """Run the agent iteration loop.
 
@@ -297,7 +298,7 @@ class AgentLoop:
             from nanobot.agent.hook_composite import CompositeHook
             from nanobot.observability.hook import OTelHook
 
-            self._otel_hook = OTelHook(channel=channel, chat_id=chat_id)
+            self._otel_hook = OTelHook(channel=channel, chat_id=chat_id, topic_name=topic_name)
             self.context._on_skills_loaded = self._otel_hook.record_skill
             hook: AgentHook = CompositeHook([loop_hook, self._otel_hook])
         else:
@@ -502,6 +503,7 @@ class AgentLoop:
                 chat_id=chat_id,
                 message_id=msg.metadata.get("message_id"),
                 message_thread_id=msg.metadata.get("message_thread_id"),
+                topic_name=msg.metadata.get("topic_name"),
             )
             self._save_turn(session, all_msgs, 1 + len(history))
             self.sessions.save(session)
@@ -572,6 +574,7 @@ class AgentLoop:
             chat_id=msg.chat_id,
             message_id=msg.metadata.get("message_id"),
             message_thread_id=msg.metadata.get("message_thread_id"),
+            topic_name=msg.metadata.get("topic_name"),
         )
 
         if final_content is None:
