@@ -9,7 +9,6 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 import json_repair
-from loguru import logger
 
 from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
@@ -52,7 +51,7 @@ class AnthropicProvider(LLMProvider):
     @staticmethod
     def _strip_prefix(model: str) -> str:
         if model.startswith("anthropic/"):
-            return model[len("anthropic/"):]
+            return model[len("anthropic/") :]
         return model
 
     # ------------------------------------------------------------------
@@ -60,7 +59,8 @@ class AnthropicProvider(LLMProvider):
     # ------------------------------------------------------------------
 
     def _convert_messages(
-        self, messages: list[dict[str, Any]],
+        self,
+        messages: list[dict[str, Any]],
     ) -> tuple[str | list[dict[str, Any]], list[dict[str, Any]]]:
         """Return ``(system, anthropic_messages)``."""
         system: str | list[dict[str, Any]] = ""
@@ -82,7 +82,8 @@ class AnthropicProvider(LLMProvider):
                         prev_c.append(block)
                     else:
                         raw[-1]["content"] = [
-                            {"type": "text", "text": prev_c or ""}, block,
+                            {"type": "text", "text": prev_c or ""},
+                            block,
                         ]
                 else:
                     raw.append({"role": "user", "content": [block]})
@@ -93,10 +94,12 @@ class AnthropicProvider(LLMProvider):
                 continue
 
             if role == "user":
-                raw.append({
-                    "role": "user",
-                    "content": self._convert_user_content(content),
-                })
+                raw.append(
+                    {
+                        "role": "user",
+                        "content": self._convert_user_content(content),
+                    }
+                )
                 continue
 
         return system, self._merge_consecutive(raw)
@@ -121,17 +124,21 @@ class AnthropicProvider(LLMProvider):
 
         for tb in msg.get("thinking_blocks") or []:
             if isinstance(tb, dict) and tb.get("type") == "thinking":
-                blocks.append({
-                    "type": "thinking",
-                    "thinking": tb.get("thinking", ""),
-                    "signature": tb.get("signature", ""),
-                })
+                blocks.append(
+                    {
+                        "type": "thinking",
+                        "thinking": tb.get("thinking", ""),
+                        "signature": tb.get("signature", ""),
+                    }
+                )
 
         if isinstance(content, str) and content:
             blocks.append({"type": "text", "text": content})
         elif isinstance(content, list):
             for item in content:
-                blocks.append(item if isinstance(item, dict) else {"type": "text", "text": str(item)})
+                blocks.append(
+                    item if isinstance(item, dict) else {"type": "text", "text": str(item)}
+                )
 
         for tc in msg.get("tool_calls") or []:
             if not isinstance(tc, dict):
@@ -140,12 +147,14 @@ class AnthropicProvider(LLMProvider):
             args = func.get("arguments", "{}")
             if isinstance(args, str):
                 args = json_repair.loads(args)
-            blocks.append({
-                "type": "tool_use",
-                "id": tc.get("id") or _gen_tool_id(),
-                "name": func.get("name", ""),
-                "input": args,
-            })
+            blocks.append(
+                {
+                    "type": "tool_use",
+                    "id": tc.get("id") or _gen_tool_id(),
+                    "name": func.get("name", ""),
+                    "input": args,
+                }
+            )
 
         return blocks or [{"type": "text", "text": ""}]
 
@@ -270,7 +279,10 @@ class AnthropicProvider(LLMProvider):
             m = new_msgs[-2]
             c = m.get("content")
             if isinstance(c, str):
-                new_msgs[-2] = {**m, "content": [{"type": "text", "text": c, "cache_control": marker}]}
+                new_msgs[-2] = {
+                    **m,
+                    "content": [{"type": "text", "text": c, "cache_control": marker}],
+                }
             elif isinstance(c, list) and c:
                 nc = list(c)
                 nc[-1] = {**nc[-1], "cache_control": marker}
@@ -304,7 +316,9 @@ class AnthropicProvider(LLMProvider):
 
         if supports_caching:
             system, anthropic_msgs, anthropic_tools = self._apply_cache_control(
-                system, anthropic_msgs, anthropic_tools,
+                system,
+                anthropic_msgs,
+                anthropic_tools,
             )
 
         max_tokens = max(1, max_tokens)
@@ -353,17 +367,21 @@ class AnthropicProvider(LLMProvider):
             if block.type == "text":
                 content_parts.append(block.text)
             elif block.type == "tool_use":
-                tool_calls.append(ToolCallRequest(
-                    id=block.id,
-                    name=block.name,
-                    arguments=block.input if isinstance(block.input, dict) else {},
-                ))
+                tool_calls.append(
+                    ToolCallRequest(
+                        id=block.id,
+                        name=block.name,
+                        arguments=block.input if isinstance(block.input, dict) else {},
+                    )
+                )
             elif block.type == "thinking":
-                thinking_blocks.append({
-                    "type": "thinking",
-                    "thinking": block.thinking,
-                    "signature": getattr(block, "signature", ""),
-                })
+                thinking_blocks.append(
+                    {
+                        "type": "thinking",
+                        "thinking": block.thinking,
+                        "signature": getattr(block, "signature", ""),
+                    }
+                )
 
         stop_map = {"tool_use": "tool_calls", "end_turn": "stop", "max_tokens": "length"}
         finish_reason = stop_map.get(response.stop_reason or "", response.stop_reason or "stop")
@@ -403,8 +421,13 @@ class AnthropicProvider(LLMProvider):
         tool_choice: str | dict[str, Any] | None = None,
     ) -> LLMResponse:
         kwargs = self._build_kwargs(
-            messages, tools, model, max_tokens, temperature,
-            reasoning_effort, tool_choice,
+            messages,
+            tools,
+            model,
+            max_tokens,
+            temperature,
+            reasoning_effort,
+            tool_choice,
         )
         try:
             response = await self._client.messages.create(**kwargs)
@@ -424,8 +447,13 @@ class AnthropicProvider(LLMProvider):
         on_content_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> LLMResponse:
         kwargs = self._build_kwargs(
-            messages, tools, model, max_tokens, temperature,
-            reasoning_effort, tool_choice,
+            messages,
+            tools,
+            model,
+            max_tokens,
+            temperature,
+            reasoning_effort,
+            tool_choice,
         )
         try:
             async with self._client.messages.stream(**kwargs) as stream:

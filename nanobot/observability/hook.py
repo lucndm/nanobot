@@ -22,7 +22,9 @@ class OTelHook(AgentHook):
     - All OTEL calls wrapped in try/except to never crash the agent.
     """
 
-    def __init__(self, channel: str = "unknown", chat_id: str = "unknown", topic_name: str | None = None) -> None:
+    def __init__(
+        self, channel: str = "unknown", chat_id: str = "unknown", topic_name: str | None = None
+    ) -> None:
         from nanobot.observability.otel import get_meter, get_tracer
 
         self._channel = channel

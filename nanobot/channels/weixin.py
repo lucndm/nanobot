@@ -13,7 +13,6 @@ import asyncio
 import base64
 import hashlib
 import json
-import mimetypes
 import os
 import re
 import time
@@ -381,7 +380,9 @@ class WeixinChannel(BaseChannel):
             self._token = self.config.token
         elif not self._load_state():
             if not await self._qr_login():
-                logger.error("WeChat login failed. Run 'nanobot channels login weixin' to authenticate.")
+                logger.error(
+                    "WeChat login failed. Run 'nanobot channels login weixin' to authenticate."
+                )
                 self._running = False
                 return
 
@@ -730,7 +731,7 @@ class WeixinChannel(BaseChannel):
             return
 
         # --- Send media files first (following Telegram channel pattern) ---
-        for media_path in (msg.media or []):
+        for media_path in msg.media or []:
             try:
                 await self._send_media_file(msg.chat_id, media_path, ctx_token)
             except Exception as e:
@@ -738,7 +739,9 @@ class WeixinChannel(BaseChannel):
                 logger.error("Failed to send WeChat media {}: {}", media_path, e)
                 # Notify user about failure via text
                 await self._send_text(
-                    msg.chat_id, f"[Failed to send: {filename}]", ctx_token,
+                    msg.chat_id,
+                    f"[Failed to send: {filename}]",
+                    ctx_token,
                 )
 
         # --- Send text content ---
@@ -868,7 +871,9 @@ class WeixinChannel(BaseChannel):
             f"?encrypted_query_param={quote(upload_param)}"
             f"&filekey={quote(file_key)}"
         )
-        logger.debug("WeChat CDN POST url={} ciphertextSize={}", cdn_upload_url[:80], len(encrypted_data))
+        logger.debug(
+            "WeChat CDN POST url={} ciphertextSize={}", cdn_upload_url[:80], len(encrypted_data)
+        )
 
         cdn_resp = await self._client.post(
             cdn_upload_url,

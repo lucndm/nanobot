@@ -80,7 +80,7 @@ def package_skill(skill_path, output_dir=None):
 
     skill_filename = output_path / f"{skill_name}.skill"
 
-    EXCLUDED_DIRS = {".git", ".svn", ".hg", "__pycache__", "node_modules"}
+    EXCLUDED_DIRS = {".git", ".svn", ".hg", "__pycache__", "node_modules"}  # noqa: N806
 
     files_to_package = []
     resolved_archive = skill_filename.resolve()

@@ -29,7 +29,9 @@ class ContextBuilder:
         self.memory = MemoryStore(workspace)
         self.skills = SkillsLoader(workspace)
 
-    def build_system_prompt(self, skill_names: list[str] | None = None, user_mood: str | None = None) -> str:
+    def build_system_prompt(
+        self, skill_names: list[str] | None = None, user_mood: str | None = None
+    ) -> str:
         """Build the system prompt from identity, bootstrap files, memory, and skills."""
         parts = [self._get_identity()]
 

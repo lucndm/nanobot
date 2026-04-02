@@ -20,7 +20,7 @@ class ToolRegistry:
         # Set agent_loop reference if provided or if registry has it
         if agent_loop is not None:
             tool.agent_loop = agent_loop
-        elif hasattr(self, '_agent_loop') and self._agent_loop is not None:
+        elif hasattr(self, "_agent_loop") and self._agent_loop is not None:
             tool.agent_loop = self._agent_loop
         self._tools[tool.name] = tool
 
@@ -42,7 +42,7 @@ class ToolRegistry:
 
     async def execute(self, name: str, params: dict[str, Any]) -> Any:
         """Execute a tool by name with given parameters."""
-        _HINT = "\n\n[Analyze the error above and try a different approach.]"
+        _HINT = "\n\n[Analyze the error above and try a different approach.]"  # noqa: N806
 
         tool = self._tools.get(name)
         if not tool:
@@ -51,7 +51,7 @@ class ToolRegistry:
         try:
             # Attempt to cast parameters to match schema types
             params = tool.cast_params(params)
-            
+
             # Validate parameters
             errors = tool.validate_params(params)
             if errors:
