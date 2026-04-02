@@ -8,8 +8,10 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
+from opentelemetry.metrics import Observation
 
 from nanobot.config.paths import get_legacy_sessions_dir
+from nanobot.observability.otel import get_meter
 from nanobot.utils.helpers import ensure_dir, safe_filename
 
 
@@ -137,6 +139,17 @@ class SessionManager:
         self.sessions_dir = ensure_dir(self.workspace / "sessions")
         self.legacy_sessions_dir = get_legacy_sessions_dir()
         self._cache: dict[str, Session] = {}
+
+        meter = get_meter()
+        if meter is not None:
+            meter.create_observable_gauge(
+                "nanobot.session.active",
+                callbacks=[self._observe_active_sessions],
+                description="Number of active sessions in cache",
+            )
+
+    def _observe_active_sessions(self, options):
+        yield Observation(len(self._cache), attributes={})
 
     def _get_session_path(self, key: str) -> Path:
         """Get the file path for a session."""
