@@ -44,6 +44,8 @@ class AgentDefaults(Base):
     temperature: float = 0.1
     max_tool_iterations: int = 40
     reasoning_effort: str | None = None  # low / medium / high - enables LLM thinking mode
+    fallback_model: str | None = None  # e.g. "openrouter/free"
+    fallback_provider: str | None = None  # e.g. "openrouter" or "auto"
     timezone: str = "UTC"  # IANA timezone, e.g. "Asia/Shanghai", "America/New_York"
 
 
