@@ -87,6 +87,10 @@ class AgentLoop:
         self._last_usage: dict[str, int] = {}
 
         self.context = ContextBuilder(workspace, timezone=timezone)
+
+        from nanobot.agent.memory_migrate import migrate_files_to_sqlite
+        migrate_files_to_sqlite(workspace)
+
         self.sessions = session_manager or SessionManager(workspace)
         self.tools = ToolRegistry()
         self.runner = AgentRunner(provider)

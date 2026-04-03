@@ -497,7 +497,7 @@ class MemoryConsolidator:
         """Archive messages with guaranteed persistence (retries until raw-dump fallback)."""
         if not messages:
             return True
-        for _ in range(self.store._MAX_FAILURES_BEFORE_RAW_ARCHIVE):
+        for _ in range(self.store._MAX_FAILURES):
             if await self.consolidate_messages(messages):
                 return True
         return True
