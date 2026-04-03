@@ -316,6 +316,23 @@ class SqliteMemoryStore:
     def _failure_key(self, topic: str | None) -> str:
         return topic if topic else "global"
 
+    def format_messages_for_consolidation(self, messages: list[dict], topic: str | None) -> str:
+        """Format messages, prefixing high-value ones with [HIGH VALUE]."""
+        high_value_ids: set[int] = set()
+        if topic:
+            high_value_ids = set(self.get_high_value_messages(topic))
+
+        lines = []
+        for msg in messages:
+            if not msg.get("content"):
+                continue
+            tools = f" [tools: {', '.join(msg['tools_used'])}]" if msg.get("tools_used") else ""
+            prefix = "[HIGH VALUE] " if msg.get("telegram_message_id") in high_value_ids else ""
+            lines.append(
+                f"[{msg.get('timestamp', '?')[:16]}] {msg['role'].upper()}{tools}: {prefix}{msg['content']}"
+            )
+        return "\n".join(lines)
+
     async def consolidate(self, messages: list[dict], provider, model: str) -> bool:
         return await self._do_consolidate(None, messages, provider, model)
 
@@ -330,14 +347,21 @@ class SqliteMemoryStore:
         if not messages:
             return True
 
+        high_value_ids = set(self.get_high_value_messages(topic)) if topic else set()
+        high_count = sum(1 for m in messages if m.get("telegram_message_id") in high_value_ids)
+        logger.debug("CONSOLIDATION: topic={} high_value={} total={} messages", topic, high_count, len(messages))
+
         current = self.read_topic_memory(topic) if topic else self.read_long_term()
+        formatted = self.format_messages_for_consolidation(messages, topic)
         prompt = f"""Process this conversation and call the save_memory tool with your consolidation.
 
 ## Current {"Topic" if topic else "Long-term"} Memory
 {current or "(empty)"}
 
 ## Conversation to Process
-{MemoryStore._format_messages(messages)}"""
+{formatted}
+
+Prioritize preserving insights from [HIGH VALUE] messages — the user confirmed these are valuable."""
 
         chat_messages = [
             {
