@@ -19,6 +19,9 @@ if TYPE_CHECKING:
     from nanobot.session.manager import Session, SessionManager
 
 
+_POSITIVE_EMOJI = frozenset({"👍", "❤️", "🔥", "💯", "👏", "😊", "🎉", "⭐"})
+_NEGATIVE_EMOJI = frozenset({"👎", "😡", "😢", "🤔", "😤"})
+
 _SAVE_MEMORY_TOOL = [
     {
         "type": "function",
@@ -102,6 +105,24 @@ class SqliteMemoryStore:
             conn.execute("""CREATE TABLE IF NOT EXISTS topic_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, topic TEXT NOT NULL,
                 timestamp TEXT NOT NULL, entry TEXT NOT NULL)""")
+            conn.execute("""CREATE TABLE IF NOT EXISTS message_reactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id TEXT NOT NULL, message_id INTEGER NOT NULL,
+                emoji TEXT NOT NULL, sentiment TEXT NOT NULL DEFAULT 'neutral',
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(chat_id, message_id, emoji))""")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_reactions_chat ON message_reactions(chat_id)")
+            conn.execute("""CREATE TABLE IF NOT EXISTS message_sentiment (
+                chat_id TEXT NOT NULL, message_id INTEGER NOT NULL, topic TEXT NOT NULL,
+                positive_count INTEGER DEFAULT 0, negative_count INTEGER DEFAULT 0,
+                neutral_count INTEGER DEFAULT 0,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (chat_id, message_id))""")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_sentiment_topic ON message_sentiment(topic)")
+            conn.execute("""CREATE TABLE IF NOT EXISTS emoji_sentiment (
+                emoji TEXT PRIMARY KEY,
+                sentiment TEXT NOT NULL CHECK(sentiment IN ('positive', 'negative', 'neutral')),
+                learned_at TEXT NOT NULL DEFAULT (datetime('now')))""")
 
     def read_long_term(self) -> str:
         with self._conn() as conn:
@@ -180,6 +201,113 @@ class SqliteMemoryStore:
         with self._conn() as conn:
             rows = conn.execute("SELECT topic FROM topic_memory ORDER BY topic").fetchall()
         return [r[0] for r in rows]
+
+    # ── Reactions ──────────────────────────────────────────────────
+
+    def record_reaction(
+        self, chat_id: str, message_id: int, emoji: str, sentiment: str, topic: str
+    ) -> None:
+        with self._conn() as conn:
+            cursor = conn.execute(
+                "INSERT OR IGNORE INTO message_reactions "
+                "(chat_id, message_id, emoji, sentiment) VALUES (?, ?, ?, ?)",
+                (chat_id, message_id, emoji, sentiment),
+            )
+            if cursor.rowcount == 0:
+                return  # Duplicate reaction, nothing to do
+            # Upsert sentiment counts
+            count_col = f"{sentiment}_count"
+            conn.execute(
+                f"INSERT INTO message_sentiment (chat_id, message_id, topic, {count_col}) "
+                f"VALUES (?, ?, ?, 1) "
+                f"ON CONFLICT(chat_id, message_id) DO UPDATE SET "
+                f"{count_col} = {count_col} + 1, "
+                f"updated_at = datetime('now')",
+                (chat_id, message_id, topic),
+            )
+
+    def remove_reaction(self, chat_id: str, message_id: int, emoji: str) -> None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT sentiment FROM message_reactions "
+                "WHERE chat_id = ? AND message_id = ? AND emoji = ?",
+                (chat_id, message_id, emoji),
+            ).fetchone()
+            if row is None:
+                return
+            sentiment = row[0]
+            conn.execute(
+                "DELETE FROM message_reactions "
+                "WHERE chat_id = ? AND message_id = ? AND emoji = ?",
+                (chat_id, message_id, emoji),
+            )
+            count_col = f"{sentiment}_count"
+            conn.execute(
+                f"UPDATE message_sentiment SET {count_col} = MAX({count_col} - 1, 0), "
+                f"updated_at = datetime('now') "
+                f"WHERE chat_id = ? AND message_id = ?",
+                (chat_id, message_id),
+            )
+
+    def get_message_sentiment(self, chat_id: str, message_id: int) -> dict[str, int]:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT positive_count, negative_count, neutral_count "
+                "FROM message_sentiment WHERE chat_id = ? AND message_id = ?",
+                (chat_id, message_id),
+            ).fetchone()
+        if row is None:
+            return {"positive_count": 0, "negative_count": 0, "neutral_count": 0}
+        return {
+            "positive_count": row[0] or 0,
+            "negative_count": row[1] or 0,
+            "neutral_count": row[2] or 0,
+        }
+
+    def get_high_value_messages(self, topic: str) -> list[int]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT message_id FROM message_sentiment "
+                "WHERE topic = ? AND positive_count >= 1",
+                (topic,),
+            ).fetchall()
+        return [r[0] for r in rows]
+
+    def resolve_emoji_sentiment(self, emoji: str) -> str | None:
+        if emoji in _POSITIVE_EMOJI:
+            return "positive"
+        if emoji in _NEGATIVE_EMOJI:
+            return "negative"
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT sentiment FROM emoji_sentiment WHERE emoji = ?", (emoji,)
+            ).fetchone()
+        return row[0] if row else None
+
+    def is_emoji_known(self, emoji: str) -> bool:
+        if emoji in _POSITIVE_EMOJI or emoji in _NEGATIVE_EMOJI:
+            return True
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM emoji_sentiment WHERE emoji = ?", (emoji,)
+            ).fetchone()
+        return row is not None
+
+    def learn_emoji(self, emoji: str, sentiment: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO emoji_sentiment (emoji, sentiment) VALUES (?, ?)",
+                (emoji, sentiment),
+            )
+
+    def cleanup_old_reactions(self, max_age_days: int = 30) -> int:
+        with self._conn() as conn:
+            cursor = conn.execute(
+                "DELETE FROM message_reactions "
+                "WHERE created_at < datetime('now', ?)",
+                (f"-{max_age_days} days",),
+            )
+            return cursor.rowcount
 
     # ── Consolidation ──────────────────────────────────────────────
 
