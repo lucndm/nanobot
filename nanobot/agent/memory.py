@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 import weakref
 from datetime import datetime
 from pathlib import Path
@@ -71,6 +72,66 @@ def _is_tool_choice_unsupported(content: str | None) -> bool:
     """Detect provider errors caused by forced tool_choice being unsupported."""
     text = (content or "").lower()
     return any(m in text for m in _TOOL_CHOICE_ERROR_MARKERS)
+
+
+class SqliteMemoryStore:
+    """SQLite-backed memory: global + per-topic. Replaces file-based MemoryStore."""
+
+    def __init__(self, workspace: Path):
+        self._db_path = workspace / "data" / "memories.db"
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._init_tables()
+        self._failures: dict[str, int] = {}
+
+    def _conn(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(str(self._db_path))
+        conn.execute("PRAGMA journal_mode=WAL")
+        return conn
+
+    def _init_tables(self) -> None:
+        with self._conn() as conn:
+            conn.execute("""CREATE TABLE IF NOT EXISTS global_memory (
+                key TEXT PRIMARY KEY, value TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')))""")
+            conn.execute("""CREATE TABLE IF NOT EXISTS global_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL,
+                entry TEXT NOT NULL)""")
+            conn.execute("""CREATE TABLE IF NOT EXISTS topic_memory (
+                topic TEXT PRIMARY KEY, memory TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')))""")
+            conn.execute("""CREATE TABLE IF NOT EXISTS topic_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, topic TEXT NOT NULL,
+                timestamp TEXT NOT NULL, entry TEXT NOT NULL)""")
+
+    def read_long_term(self) -> str:
+        with self._conn() as conn:
+            row = conn.execute("SELECT value FROM global_memory WHERE key = 'long_term'").fetchone()
+        return row[0] if row else ""
+
+    def write_long_term(self, content: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO global_memory (key, value, updated_at) VALUES ('long_term', ?, datetime('now')) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+                (content,))
+
+    def read_history(self) -> str:
+        with self._conn() as conn:
+            rows = conn.execute("SELECT entry FROM global_history ORDER BY id").fetchall()
+        return "\n\n".join(r[0] for r in rows)
+
+    def append_history(self, entry: str) -> None:
+        from datetime import datetime
+
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+        with self._conn() as conn:
+            conn.execute("INSERT INTO global_history (timestamp, entry) VALUES (?, ?)", (ts, entry.rstrip()))
+
+    def get_memory_context(self) -> str:
+        long_term = self.read_long_term()
+        if not long_term:
+            return ""
+        return f"## Global Memory\n{long_term}"
 
 
 class MemoryStore:
