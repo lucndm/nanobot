@@ -632,16 +632,30 @@ class MemoryConsolidator:
         self,
         session: Session,
         tokens_to_remove: int,
+        *,
+        topic_name: str | None = None,
     ) -> tuple[int, int] | None:
-        """Pick a user-turn boundary that removes enough old prompt tokens."""
+        """Pick a user-turn boundary that removes enough old prompt tokens.
+
+        High-value messages (positively reacted) are skipped during boundary
+        selection, so they are preserved longer in context.
+        """
         start = session.last_consolidated
         if start >= len(session.messages) or tokens_to_remove <= 0:
             return None
+
+        high_value_ids: set[int] = set()
+        if topic_name:
+            high_value_ids = set(self.store.get_high_value_messages(topic_name))
 
         removed_tokens = 0
         last_boundary: tuple[int, int] | None = None
         for idx in range(start, len(session.messages)):
             message = session.messages[idx]
+            # Skip high-value messages — don't count them for removal
+            msg_id = message.get("telegram_message_id")
+            if msg_id is not None and msg_id in high_value_ids:
+                continue
             if idx > start and message.get("role") == "user":
                 last_boundary = (idx, removed_tokens)
                 if removed_tokens >= tokens_to_remove:
@@ -708,7 +722,9 @@ class MemoryConsolidator:
                 if estimated <= target:
                     return
 
-                boundary = self.pick_consolidation_boundary(session, max(1, estimated - target))
+                boundary = self.pick_consolidation_boundary(
+                    session, max(1, estimated - target), topic_name=topic_name
+                )
                 if boundary is None:
                     logger.debug(
                         "Token consolidation: no safe boundary for {} (round {})",

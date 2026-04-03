@@ -95,13 +95,19 @@ class Session:
         self.last_consolidated = 0
         self.updated_at = datetime.now()
 
-    def retain_recent_legal_suffix(self, max_messages: int) -> None:
-        """Keep a legal recent suffix, mirroring get_history boundary rules."""
+    def retain_recent_legal_suffix(self, max_messages: int, *, high_value_ids: set[int] | None = None) -> None:
+        """Keep a legal recent suffix, mirroring get_history boundary rules.
+
+        When high_value_ids is provided, prefer keeping messages whose
+        telegram_message_id is in the set.
+        """
         if max_messages <= 0:
             self.clear()
             return
         if len(self.messages) <= max_messages:
             return
+
+        high_value_ids = high_value_ids or set()
 
         start_idx = max(0, len(self.messages) - max_messages)
 
@@ -116,9 +122,30 @@ class Session:
         if start:
             retained = retained[start:]
 
-        dropped = len(self.messages) - len(retained)
+        # Prefer keeping high-value messages: if any dropped messages are high-value
+        # and any retained messages are not, swap them.
+        if high_value_ids:
+            dropped = self.messages[: len(self.messages) - len(retained)]
+            retained_non_hv = [m for m in retained if m.get("telegram_message_id") not in high_value_ids]
+            dropped_hv = [m for m in dropped if m.get("telegram_message_id") in high_value_ids]
+            # Swap up to min(count) messages from dropped high-value with retained non-high-value
+            swap_count = min(len(dropped_hv), len(retained_non_hv))
+            if swap_count > 0:
+                # Build new retained list: keep existing order, swap the oldest non-HV with oldest HV from dropped
+                new_retained = []
+                hv_idx = 0
+                for m in retained:
+                    if swap_count > 0 and m.get("telegram_message_id") not in high_value_ids and hv_idx < len(dropped_hv):
+                        new_retained.append(dropped_hv[hv_idx])
+                        hv_idx += 1
+                        swap_count -= 1
+                    else:
+                        new_retained.append(m)
+                retained = new_retained
+
+        dropped_count = len(self.messages) - len(retained)
         self.messages = retained
-        self.last_consolidated = max(0, self.last_consolidated - dropped)
+        self.last_consolidated = max(0, self.last_consolidated - dropped_count)
         self.updated_at = datetime.now()
 
 
