@@ -382,18 +382,18 @@ def _onboard_plugins(config_path: Path) -> None:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 
-def _make_provider(config: Config):
-    """Create the appropriate LLM provider from config.
+def _create_provider(config: Config, model: str, provider_name: str | None = None):
+    """Create a single LLM provider instance for the given model.
 
-    Routing is driven by ``ProviderSpec.backend`` in the registry.
+    If *provider_name* is given, it is used directly instead of
+    ``config.get_provider_name(model)`` (which is driven by
+    ``agents.defaults.provider`` and keyword matching).
     """
-    from nanobot.providers.base import GenerationSettings
     from nanobot.providers.registry import find_by_name
 
-    model = config.agents.defaults.model
-    provider_name = config.get_provider_name(model)
+    resolved_name = provider_name or config.get_provider_name(model)
     p = config.get_provider(model)
-    spec = find_by_name(provider_name) if provider_name else None
+    spec = find_by_name(resolved_name) if resolved_name else None
     backend = spec.backend if spec else "openai_compat"
 
     # --- validation ---
@@ -415,11 +415,11 @@ def _make_provider(config: Config):
     if backend == "openai_codex":
         from nanobot.providers.openai_codex_provider import OpenAICodexProvider
 
-        provider = OpenAICodexProvider(default_model=model)
+        return OpenAICodexProvider(default_model=model)
     elif backend == "azure_openai":
         from nanobot.providers.azure_openai_provider import AzureOpenAIProvider
 
-        provider = AzureOpenAIProvider(
+        return AzureOpenAIProvider(
             api_key=p.api_key,
             api_base=p.api_base,
             default_model=model,
@@ -427,7 +427,7 @@ def _make_provider(config: Config):
     elif backend == "anthropic":
         from nanobot.providers.anthropic_provider import AnthropicProvider
 
-        provider = AnthropicProvider(
+        return AnthropicProvider(
             api_key=p.api_key if p else None,
             api_base=config.get_api_base(model),
             default_model=model,
@@ -436,7 +436,7 @@ def _make_provider(config: Config):
     else:
         from nanobot.providers.openai_compat_provider import OpenAICompatProvider
 
-        provider = OpenAICompatProvider(
+        return OpenAICompatProvider(
             api_key=p.api_key if p else None,
             api_base=config.get_api_base(model),
             default_model=model,
@@ -444,13 +444,40 @@ def _make_provider(config: Config):
             spec=spec,
         )
 
+
+def _make_provider(config: Config):
+    """Create the appropriate LLM provider from config.
+
+    Routing is driven by ``ProviderSpec.backend`` in the registry.
+    If ``agents.defaults.fallback_model`` is set, wraps primary in
+    a :class:`FallbackProvider` that delegates to the fallback on error.
+    """
+    from nanobot.providers.base import GenerationSettings
+    from nanobot.providers.fallback_provider import FallbackProvider
+
     defaults = config.agents.defaults
-    provider.generation = GenerationSettings(
+    model = defaults.model
+    primary = _create_provider(config, model)
+
+    if defaults.fallback_model:
+        fb_provider_name = defaults.fallback_provider or config.get_provider_name(
+            defaults.fallback_model
+        )
+        fallback = _create_provider(
+            config, defaults.fallback_model, provider_name=fb_provider_name
+        )
+        primary = FallbackProvider(
+            primary=primary,
+            fallback=fallback,
+            fallback_model=defaults.fallback_model,
+        )
+
+    primary.generation = GenerationSettings(
         temperature=defaults.temperature,
         max_tokens=defaults.max_tokens,
         reasoning_effort=defaults.reasoning_effort,
     )
-    return provider
+    return primary
 
 
 def _load_runtime_config(config: str | None = None, workspace: str | None = None) -> Config:
