@@ -13,7 +13,7 @@ from loguru import logger
 from pydantic import Field
 from telegram import BotCommand, ReactionTypeEmoji, ReplyParameters, Update
 from telegram.error import BadRequest, TimedOut
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, MessageReactionHandler, filters
 from telegram.request import HTTPXRequest
 
 from nanobot.bus.events import OutboundMessage
@@ -207,6 +207,9 @@ class TelegramChannel(BaseChannel):
         BotCommand("status", "Show bot status"),
     ]
 
+    _POSITIVE_EMOJI = frozenset({"👍", "❤️", "🔥", "💯", "👏", "😊", "🎉", "⭐"})
+    _NEGATIVE_EMOJI = frozenset({"👎", "😡", "😢", "🤔", "😤"})
+
     @classmethod
     def default_config(cls) -> dict[str, Any]:
         return TelegramConfig().model_dump(by_alias=True)
@@ -307,6 +310,9 @@ class TelegramChannel(BaseChannel):
         self._app.add_handler(CommandHandler("status", self._forward_command))
         self._app.add_handler(CommandHandler("help", self._on_help))
 
+        # Add reaction handler
+        self._app.add_handler(MessageReactionHandler(self._on_reaction))
+
         # Add message handler for text, photos, voice, documents
         self._app.add_handler(
             MessageHandler(
@@ -342,7 +348,7 @@ class TelegramChannel(BaseChannel):
 
         # Start polling (this runs until stopped)
         await self._app.updater.start_polling(
-            allowed_updates=["message"],
+            allowed_updates=["message", "message_reaction"],
             drop_pending_updates=True,  # Ignore old messages on startup
         )
 
@@ -1103,6 +1109,88 @@ class TelegramChannel(BaseChannel):
             logger.warning("Telegram network issue: {}", str(context.error))
         else:
             logger.error("Telegram error: {}", context.error)
+
+    @staticmethod
+    def _classify_emoji(emoji: str) -> str | None:
+        """Map emoji to sentiment. Returns None if unknown."""
+        if emoji in TelegramChannel._POSITIVE_EMOJI:
+            return "positive"
+        if emoji in TelegramChannel._NEGATIVE_EMOJI:
+            return "negative"
+        return None
+
+    @staticmethod
+    def _resolve_reaction_topic(chat_id: str, thread_id: int | None) -> str:
+        """Resolve session topic key from chat_id and thread_id."""
+        if thread_id:
+            return f"telegram:{chat_id}:topic:{thread_id}"
+        return f"telegram:{chat_id}"
+
+    async def _on_reaction(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle message reaction updates from Telegram users."""
+        reaction_update = update.message_reaction
+        if not reaction_update:
+            return
+
+        chat_id = reaction_update.chat.id
+        message_id = reaction_update.message_id
+        str_chat_id = str(chat_id)
+
+        # Only process reactions on bot messages (reactions where the actor is the bot user)
+        actor = reaction_update.user
+        if actor and actor.id == self._bot_user_id:
+            return
+
+        # Resolve topic from thread context
+        # MessageReactionUpdated doesn't carry message_thread_id directly,
+        # so we use the cached thread map if available.
+        thread_id = self._message_threads.get((str_chat_id, message_id))
+        topic = self._resolve_reaction_topic(str_chat_id, thread_id)
+
+        # Process removed reactions
+        for reaction in reaction_update.old_reaction:
+            if not isinstance(reaction, ReactionTypeEmoji):
+                continue
+            emoji = reaction.emoji
+            sentiment = self._classify_emoji(emoji)
+            if sentiment:
+                logger.debug(
+                    "REACTION_REMOVE: chat_id={} topic={} msg_id={} emoji={} sentiment={}",
+                    str_chat_id, topic, message_id, emoji, sentiment,
+                )
+                # Memory store wiring deferred to Task 4
+            else:
+                logger.debug(
+                    "REACTION_REMOVE_UNKNOWN: chat_id={} topic={} msg_id={} emoji={}",
+                    str_chat_id, topic, message_id, emoji,
+                )
+
+        # Process new reactions
+        for reaction in reaction_update.new_reaction:
+            if not isinstance(reaction, ReactionTypeEmoji):
+                continue
+            emoji = reaction.emoji
+            sentiment = self._classify_emoji(emoji)
+            if sentiment:
+                logger.debug(
+                    "REACTION: chat_id={} topic={} msg_id={} emoji={} -> {}",
+                    str_chat_id, topic, message_id, emoji, sentiment,
+                )
+                # Memory store wiring deferred to Task 4
+            else:
+                logger.debug(
+                    "REACTION_UNKNOWN: emoji={} asking user in chat_id={}",
+                    emoji, str_chat_id,
+                )
+                # Ask user to classify unknown emoji (one-time reply)
+                if self._app:
+                    try:
+                        await self._app.bot.send_message(
+                            chat_id=chat_id,
+                            text=f"I don't know what {emoji} means. React with 👍 (positive), 👎 (negative), or 😐 (neutral) to teach me.",
+                        )
+                    except Exception as e:
+                        logger.debug("Failed to ask user about unknown emoji: {}", e)
 
     def _get_extension(
         self,
