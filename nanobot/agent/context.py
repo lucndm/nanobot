@@ -8,7 +8,7 @@ from typing import Any
 
 from loguru import logger
 
-from nanobot.agent.memory import MemoryStore
+from nanobot.agent.memory import SqliteMemoryStore
 from nanobot.agent.skills import SkillsLoader
 from nanobot.utils.helpers import build_assistant_message, current_time_str, detect_image_mime
 
@@ -28,7 +28,7 @@ class ContextBuilder:
         self.workspace = workspace
         self.timezone = timezone
         self._on_skills_loaded = on_skills_loaded
-        self.memory = MemoryStore(workspace)
+        self.memory = SqliteMemoryStore(workspace)
         self.skills = SkillsLoader(workspace)
         self._topic_rules_cache: dict[str, str] = {}
 
@@ -100,6 +100,12 @@ class ContextBuilder:
         if memory:
             parts.append(f"# Memory\n\n{memory}")
 
+        # Inject topic memory (if topic_name set)
+        if topic_name:
+            topic_ctx = self.memory.get_topic_memory_context(topic_name)
+            if topic_ctx:
+                parts.append(f"# Topic Memory\n\n{topic_ctx}")
+
         always_skills = self.skills.get_always_skills()
         if always_skills:
             always_content = self.skills.load_skills_for_context(
@@ -153,8 +159,7 @@ You are nanobot, a helpful AI assistant.
 
 ## Workspace
 Your workspace is at: {workspace_path}
-- Long-term memory: {workspace_path}/memory/MEMORY.md (write important facts here)
-- History log: {workspace_path}/memory/HISTORY.md (grep-searchable). Each entry starts with [YYYY-MM-DD HH:MM].
+- Memory: {workspace_path}/data/memories.db (SQLite, global + per-topic)
 - Custom skills: {workspace_path}/skills/{{skill-name}}/SKILL.md
 
 {platform_policy}
