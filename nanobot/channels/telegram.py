@@ -505,6 +505,7 @@ class TelegramChannel(BaseChannel):
         thread_kwargs: dict | None = None,
     ) -> None:
         """Send a plain text message with HTML fallback."""
+        thread_kwargs = thread_kwargs or {}
         try:
             html = _markdown_to_telegram_html(text)
             await self._call_with_retry(
@@ -513,8 +514,45 @@ class TelegramChannel(BaseChannel):
                 text=html,
                 parse_mode="HTML",
                 reply_parameters=reply_params,
-                **(thread_kwargs or {}),
+                **thread_kwargs,
             )
+        except BadRequest as e:
+            err_str = str(e).lower()
+            # If thread not found, retry without thread_kwargs
+            if "thread" in err_str and thread_kwargs:
+                logger.warning("Thread not found for {}, retrying without thread", chat_id)
+                try:
+                    html = _markdown_to_telegram_html(text)
+                    await self._call_with_retry(
+                        self._app.bot.send_message,
+                        chat_id=chat_id,
+                        text=html,
+                        parse_mode="HTML",
+                        reply_parameters=reply_params,
+                    )
+                    return
+                except Exception:
+                    pass  # Fall through to plain text fallback
+            # HTML parse or other error, fall back to plain text
+            logger.warning("HTML parse failed, falling back to plain text: {}", e)
+            try:
+                await self._call_with_retry(
+                    self._app.bot.send_message,
+                    chat_id=chat_id,
+                    text=text,
+                    reply_parameters=reply_params,
+                )
+            except Exception as e2:
+                logger.error("Error sending Telegram message: {}", e2)
+                if self._send_errors:
+                    self._send_errors.add(
+                        1,
+                        attributes={
+                            "channel": self.name,
+                            "error_type": type(e2).__name__,
+                        },
+                    )
+                raise
         except Exception as e:
             logger.warning("HTML parse failed, falling back to plain text: {}", e)
             try:
@@ -523,7 +561,7 @@ class TelegramChannel(BaseChannel):
                     chat_id=chat_id,
                     text=text,
                     reply_parameters=reply_params,
-                    **(thread_kwargs or {}),
+                    **thread_kwargs,
                 )
             except Exception as e2:
                 logger.error("Error sending Telegram message: {}", e2)

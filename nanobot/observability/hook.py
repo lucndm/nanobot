@@ -22,6 +22,9 @@ class OTelHook(AgentHook):
     - All OTEL calls wrapped in try/except to never crash the agent.
     """
 
+    # Circuit breaker: suppress repeated OTEL error logs after first failure
+    _otel_failed: bool = False
+
     def __init__(
         self, channel: str = "unknown", chat_id: str = "unknown", topic_name: str | None = None
     ) -> None:
@@ -101,7 +104,7 @@ class OTelHook(AgentHook):
                 )
                 self._current_span.__enter__()
         except Exception:
-            logger.debug("OTEL: failed to start iteration span")
+            self._log_otel_error("start iteration span")
 
     async def before_execute_tools(self, context: AgentHookContext) -> None:
         now = time.monotonic()
@@ -131,7 +134,7 @@ class OTelHook(AgentHook):
                 if self._tool_duration and start != now:
                     self._tool_duration.record(duration_ms, attributes={"tool_name": tool_name})
             except Exception:
-                logger.debug("OTEL: failed to record tool metric")
+                self._log_otel_error("record tool metric")
 
         try:
             if self._active_tools_histogram and self._tools_in_session:
@@ -140,7 +143,7 @@ class OTelHook(AgentHook):
                     attributes={"channel": self._channel},
                 )
         except Exception:
-            logger.debug("OTEL: failed to record active tools")
+            self._log_otel_error("record active tools")
 
         try:
             if self._iteration_counter:
@@ -152,14 +155,14 @@ class OTelHook(AgentHook):
                     attrs["topic_name"] = self._topic_name
                 self._iteration_counter.add(1, attributes=attrs)
         except Exception:
-            logger.debug("OTEL: failed to record iteration")
+            self._log_otel_error("record iteration")
 
         try:
             if self._current_span:
                 self._current_span.__exit__(None, None, None)
                 self._current_span = None
         except Exception:
-            logger.debug("OTEL: failed to end iteration span")
+            self._log_otel_error("end iteration span")
 
         self._tool_start_times.clear()
 
@@ -172,4 +175,13 @@ class OTelHook(AgentHook):
                     attrs["topic_name"] = self._topic_name
                 self._skill_counter.add(1, attributes=attrs)
         except Exception:
-            logger.debug("OTEL: failed to record skill metric")
+            self._log_otel_error("record skill metric")
+
+    @classmethod
+    def _log_otel_error(cls, operation: str) -> None:
+        """Log OTEL error once, then suppress repeated messages."""
+        if not cls._otel_failed:
+            cls._otel_failed = True
+            logger.warning("OTEL: collector unavailable, suppressing further errors")
+        else:
+            logger.debug("OTEL: failed to {}", operation)
