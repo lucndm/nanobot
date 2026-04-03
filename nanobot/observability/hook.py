@@ -22,8 +22,10 @@ class OTelHook(AgentHook):
     - All OTEL calls wrapped in try/except to never crash the agent.
     """
 
-    # Circuit breaker: suppress repeated OTEL error logs after first failure
+    # Circuit breaker with auto-recovery
     _otel_failed: bool = False
+    _otel_failed_at: float = 0.0
+    _otel_probe_interval: float = 60.0  # seconds between health probes
 
     def __init__(
         self, channel: str = "unknown", chat_id: str = "unknown", topic_name: str | None = None
@@ -179,9 +181,38 @@ class OTelHook(AgentHook):
 
     @classmethod
     def _log_otel_error(cls, operation: str) -> None:
-        """Log OTEL error once, then suppress repeated messages."""
+        """Log OTEL error once, then suppress repeated messages.
+
+        Auto-recovers by probing the collector every _otel_probe_interval seconds.
+        If the probe succeeds, the circuit breaker resets and metrics flow again.
+        """
         if not cls._otel_failed:
             cls._otel_failed = True
+            cls._otel_failed_at = time.monotonic()
             logger.warning("OTEL: collector unavailable, suppressing further errors")
-        else:
-            logger.debug("OTEL: failed to {}", operation)
+            return
+
+        # Auto-recovery: periodically check if collector is back
+        if time.monotonic() - cls._otel_failed_at >= cls._otel_probe_interval:
+            if cls._probe_collector():
+                cls._otel_failed = False
+                cls._otel_failed_at = 0.0
+                logger.info("OTEL: collector recovered, resuming metrics")
+            else:
+                cls._otel_failed_at = time.monotonic()  # reset probe timer
+
+    @classmethod
+    def _probe_collector(cls) -> bool:
+        """Check if OTEL collector is reachable."""
+        from nanobot.observability.otel import get_meter
+
+        meter = get_meter()
+        if meter is None:
+            return False
+        try:
+            # Try to create and record a no-op counter to verify export works
+            counter = meter.create_counter("nanobot.health.probe")
+            counter.add(1, attributes={"probe": "true"})
+            return True
+        except Exception:
+            return False
