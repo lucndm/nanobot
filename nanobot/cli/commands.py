@@ -714,9 +714,7 @@ def gateway(
         if thread_id is not None:
             metadata["message_thread_id"] = thread_id
         await bus.publish_outbound(
-            OutboundMessage(
-                channel=channel, chat_id=chat_id, content=response, metadata=metadata
-            )
+            OutboundMessage(channel=channel, chat_id=chat_id, content=response, metadata=metadata)
         )
 
     hb_cfg = config.gateway.heartbeat

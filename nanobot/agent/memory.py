@@ -113,7 +113,8 @@ class SqliteMemoryStore:
             conn.execute(
                 "INSERT INTO global_memory (key, value, updated_at) VALUES ('long_term', ?, datetime('now')) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-                (content,))
+                (content,),
+            )
 
     def read_history(self) -> str:
         with self._conn() as conn:
@@ -125,7 +126,9 @@ class SqliteMemoryStore:
 
         ts = datetime.now().strftime("%Y-%m-%d %H:%M")
         with self._conn() as conn:
-            conn.execute("INSERT INTO global_history (timestamp, entry) VALUES (?, ?)", (ts, entry.rstrip()))
+            conn.execute(
+                "INSERT INTO global_history (timestamp, entry) VALUES (?, ?)", (ts, entry.rstrip())
+            )
 
     def get_memory_context(self) -> str:
         long_term = self.read_long_term()
@@ -137,7 +140,9 @@ class SqliteMemoryStore:
 
     def read_topic_memory(self, topic: str) -> str | None:
         with self._conn() as conn:
-            row = conn.execute("SELECT memory FROM topic_memory WHERE topic = ?", (topic,)).fetchone()
+            row = conn.execute(
+                "SELECT memory FROM topic_memory WHERE topic = ?", (topic,)
+            ).fetchone()
         return row[0] if row else None
 
     def write_topic_memory(self, topic: str, content: str) -> None:
@@ -150,7 +155,9 @@ class SqliteMemoryStore:
 
     def read_topic_history(self, topic: str) -> str:
         with self._conn() as conn:
-            rows = conn.execute("SELECT entry FROM topic_history WHERE topic = ? ORDER BY id", (topic,)).fetchall()
+            rows = conn.execute(
+                "SELECT entry FROM topic_history WHERE topic = ? ORDER BY id", (topic,)
+            ).fetchall()
         return "\n\n".join(r[0] for r in rows)
 
     def append_topic_history(self, topic: str, entry: str) -> None:
@@ -184,10 +191,14 @@ class SqliteMemoryStore:
     async def consolidate(self, messages: list[dict], provider, model: str) -> bool:
         return await self._do_consolidate(None, messages, provider, model)
 
-    async def consolidate_topic(self, topic: str, messages: list[dict], provider, model: str) -> bool:
+    async def consolidate_topic(
+        self, topic: str, messages: list[dict], provider, model: str
+    ) -> bool:
         return await self._do_consolidate(topic, messages, provider, model)
 
-    async def _do_consolidate(self, topic: str | None, messages: list[dict], provider, model: str) -> bool:
+    async def _do_consolidate(
+        self, topic: str | None, messages: list[dict], provider, model: str
+    ) -> bool:
         if not messages:
             return True
 
@@ -201,19 +212,28 @@ class SqliteMemoryStore:
 {MemoryStore._format_messages(messages)}"""
 
         chat_messages = [
-            {"role": "system", "content": "You are a memory consolidation agent. Call the save_memory tool."},
+            {
+                "role": "system",
+                "content": "You are a memory consolidation agent. Call the save_memory tool.",
+            },
             {"role": "user", "content": prompt},
         ]
 
         try:
             forced = {"type": "function", "function": {"name": "save_memory"}}
             response = await provider.chat_with_retry(
-                messages=chat_messages, tools=_SAVE_MEMORY_TOOL, model=model, tool_choice=forced,
+                messages=chat_messages,
+                tools=_SAVE_MEMORY_TOOL,
+                model=model,
+                tool_choice=forced,
             )
 
             if response.finish_reason == "error" and _is_tool_choice_unsupported(response.content):
                 response = await provider.chat_with_retry(
-                    messages=chat_messages, tools=_SAVE_MEMORY_TOOL, model=model, tool_choice="auto",
+                    messages=chat_messages,
+                    tools=_SAVE_MEMORY_TOOL,
+                    model=model,
+                    tool_choice="auto",
                 )
 
             if not response.has_tool_calls:
@@ -451,7 +471,9 @@ class MemoryConsolidator:
     ) -> bool:
         """Archive a selected message chunk into persistent memory."""
         if topic_name is not None:
-            return await self.store.consolidate_topic(topic_name, messages, self.provider, self.model)
+            return await self.store.consolidate_topic(
+                topic_name, messages, self.provider, self.model
+            )
         return await self.store.consolidate(messages, self.provider, self.model)
 
     def pick_consolidation_boundary(
@@ -502,7 +524,9 @@ class MemoryConsolidator:
                 return True
         return True
 
-    async def maybe_consolidate_by_tokens(self, session: Session, topic_name: str | None = None) -> None:
+    async def maybe_consolidate_by_tokens(
+        self, session: Session, topic_name: str | None = None
+    ) -> None:
         """Loop: archive old messages until prompt fits within safe budget.
 
         The budget reserves space for completion tokens and a safety buffer

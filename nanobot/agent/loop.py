@@ -89,6 +89,7 @@ class AgentLoop:
         self.context = ContextBuilder(workspace, timezone=timezone)
 
         from nanobot.agent.memory_migrate import migrate_files_to_sqlite
+
         migrate_files_to_sqlite(workspace)
 
         self.sessions = session_manager or SessionManager(workspace)
@@ -487,7 +488,9 @@ class AgentLoop:
             key = f"{channel}:{chat_id}"
             session = self.sessions.get_or_create(key)
             topic_name = msg.metadata.get("topic_name")
-            await self.memory_consolidator.maybe_consolidate_by_tokens(session, topic_name=topic_name)
+            await self.memory_consolidator.maybe_consolidate_by_tokens(
+                session, topic_name=topic_name
+            )
             self._set_tool_context(
                 channel,
                 chat_id,
