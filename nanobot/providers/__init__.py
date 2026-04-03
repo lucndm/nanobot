@@ -14,6 +14,7 @@ __all__ = [
     "OpenAICompatProvider",
     "OpenAICodexProvider",
     "AzureOpenAIProvider",
+    "FallbackProvider",
 ]
 
 _LAZY_IMPORTS = {
@@ -21,11 +22,13 @@ _LAZY_IMPORTS = {
     "OpenAICompatProvider": ".openai_compat_provider",
     "OpenAICodexProvider": ".openai_codex_provider",
     "AzureOpenAIProvider": ".azure_openai_provider",
+    "FallbackProvider": ".fallback_provider",
 }
 
 if TYPE_CHECKING:
     from nanobot.providers.anthropic_provider import AnthropicProvider
     from nanobot.providers.azure_openai_provider import AzureOpenAIProvider
+    from nanobot.providers.fallback_provider import FallbackProvider
     from nanobot.providers.openai_codex_provider import OpenAICodexProvider
     from nanobot.providers.openai_compat_provider import OpenAICompatProvider
 
