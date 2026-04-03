@@ -133,6 +133,47 @@ class SqliteMemoryStore:
             return ""
         return f"## Global Memory\n{long_term}"
 
+    # ── Topic CRUD ───────────────────────────────────────────────────
+
+    def read_topic_memory(self, topic: str) -> str | None:
+        with self._conn() as conn:
+            row = conn.execute("SELECT memory FROM topic_memory WHERE topic = ?", (topic,)).fetchone()
+        return row[0] if row else None
+
+    def write_topic_memory(self, topic: str, content: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO topic_memory (topic, memory, updated_at) VALUES (?, ?, datetime('now')) "
+                "ON CONFLICT(topic) DO UPDATE SET memory=excluded.memory, updated_at=excluded.updated_at",
+                (topic, content),
+            )
+
+    def read_topic_history(self, topic: str) -> str:
+        with self._conn() as conn:
+            rows = conn.execute("SELECT entry FROM topic_history WHERE topic = ? ORDER BY id", (topic,)).fetchall()
+        return "\n\n".join(r[0] for r in rows)
+
+    def append_topic_history(self, topic: str, entry: str) -> None:
+        from datetime import datetime
+
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO topic_history (topic, timestamp, entry) VALUES (?, ?, ?)",
+                (topic, ts, entry.rstrip()),
+            )
+
+    def get_topic_memory_context(self, topic: str) -> str | None:
+        memory = self.read_topic_memory(topic)
+        if not memory:
+            return None
+        return f"## Topic Memory ({topic})\n{memory}"
+
+    def list_topics(self) -> list[str]:
+        with self._conn() as conn:
+            rows = conn.execute("SELECT topic FROM topic_memory ORDER BY topic").fetchall()
+        return [r[0] for r in rows]
+
 
 class MemoryStore:
     """Two-layer memory: MEMORY.md (long-term facts) + HISTORY.md (grep-searchable log)."""
