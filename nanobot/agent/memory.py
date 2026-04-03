@@ -432,7 +432,7 @@ class MemoryConsolidator:
         get_tool_definitions: Callable[[], list[dict[str, Any]]],
         max_completion_tokens: int = 4096,
     ):
-        self.store = MemoryStore(workspace)
+        self.store = SqliteMemoryStore(workspace)
         self.provider = provider
         self.model = model
         self.sessions = sessions
@@ -446,8 +446,12 @@ class MemoryConsolidator:
         """Return the shared consolidation lock for one session."""
         return self._locks.setdefault(session_key, asyncio.Lock())
 
-    async def consolidate_messages(self, messages: list[dict[str, object]]) -> bool:
+    async def consolidate_messages(
+        self, messages: list[dict[str, object]], topic_name: str | None = None
+    ) -> bool:
         """Archive a selected message chunk into persistent memory."""
+        if topic_name is not None:
+            return await self.store.consolidate_topic(topic_name, messages, self.provider, self.model)
         return await self.store.consolidate(messages, self.provider, self.model)
 
     def pick_consolidation_boundary(
@@ -498,7 +502,7 @@ class MemoryConsolidator:
                 return True
         return True
 
-    async def maybe_consolidate_by_tokens(self, session: Session) -> None:
+    async def maybe_consolidate_by_tokens(self, session: Session, topic_name: str | None = None) -> None:
         """Loop: archive old messages until prompt fits within safe budget.
 
         The budget reserves space for completion tokens and a safety buffer
@@ -551,7 +555,7 @@ class MemoryConsolidator:
                     source,
                     len(chunk),
                 )
-                if not await self.consolidate_messages(chunk):
+                if not await self.consolidate_messages(chunk, topic_name=topic_name):
                     return
                 session.last_consolidated = end_idx
                 self.sessions.save(session)

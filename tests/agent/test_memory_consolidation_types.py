@@ -1,4 +1,4 @@
-"""Test MemoryStore.consolidate() handles non-string tool call arguments.
+"""Test SqliteMemoryStore.consolidate() handles non-string tool call arguments.
 
 Regression test for https://github.com/HKUDS/nanobot/issues/1042
 When memory consolidation receives dict values instead of strings from the LLM
@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from nanobot.agent.memory import MemoryStore
+from nanobot.agent.memory import SqliteMemoryStore
 from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
 
@@ -62,7 +62,7 @@ class TestMemoryConsolidationTypeHandling:
     @pytest.mark.asyncio
     async def test_string_arguments_work(self, tmp_path: Path) -> None:
         """Normal case: LLM returns string arguments."""
-        store = MemoryStore(tmp_path)
+        store = SqliteMemoryStore(tmp_path)
         provider = AsyncMock()
         provider.chat = AsyncMock(
             return_value=_make_tool_response(
@@ -76,14 +76,14 @@ class TestMemoryConsolidationTypeHandling:
         result = await store.consolidate(messages, provider, "test-model")
 
         assert result is True
-        assert store.history_file.exists()
-        assert "[2026-01-01] User discussed testing." in store.history_file.read_text()
-        assert "User likes testing." in store.memory_file.read_text()
+        history = store.read_history()
+        assert "[2026-01-01] User discussed testing." in history
+        assert "User likes testing." in store.read_long_term()
 
     @pytest.mark.asyncio
     async def test_dict_arguments_serialized_to_json(self, tmp_path: Path) -> None:
-        """Issue #1042: LLM returns dict instead of string — must not raise TypeError."""
-        store = MemoryStore(tmp_path)
+        """Issue #1042: LLM returns dict instead of string -- must not raise TypeError."""
+        store = SqliteMemoryStore(tmp_path)
         provider = AsyncMock()
         provider.chat = AsyncMock(
             return_value=_make_tool_response(
@@ -97,19 +97,18 @@ class TestMemoryConsolidationTypeHandling:
         result = await store.consolidate(messages, provider, "test-model")
 
         assert result is True
-        assert store.history_file.exists()
-        history_content = store.history_file.read_text()
+        history_content = store.read_history()
         parsed = json.loads(history_content.strip())
         assert parsed["summary"] == "User discussed testing."
 
-        memory_content = store.memory_file.read_text()
+        memory_content = store.read_long_term()
         parsed_mem = json.loads(memory_content)
         assert "User likes testing" in parsed_mem["facts"]
 
     @pytest.mark.asyncio
     async def test_string_arguments_as_raw_json(self, tmp_path: Path) -> None:
         """Some providers return arguments as a JSON string instead of parsed dict."""
-        store = MemoryStore(tmp_path)
+        store = SqliteMemoryStore(tmp_path)
         provider = AsyncMock()
 
         response = LLMResponse(
@@ -132,12 +131,12 @@ class TestMemoryConsolidationTypeHandling:
         result = await store.consolidate(messages, provider, "test-model")
 
         assert result is True
-        assert "User discussed testing." in store.history_file.read_text()
+        assert "User discussed testing." in store.read_history()
 
     @pytest.mark.asyncio
     async def test_no_tool_call_returns_false(self, tmp_path: Path) -> None:
         """When LLM doesn't use the save_memory tool, return False."""
-        store = MemoryStore(tmp_path)
+        store = SqliteMemoryStore(tmp_path)
         provider = AsyncMock()
         provider.chat = AsyncMock(
             return_value=LLMResponse(content="I summarized the conversation.", tool_calls=[])
@@ -148,12 +147,12 @@ class TestMemoryConsolidationTypeHandling:
         result = await store.consolidate(messages, provider, "test-model")
 
         assert result is False
-        assert not store.history_file.exists()
+        assert store.read_history() == ""
 
     @pytest.mark.asyncio
     async def test_skips_when_message_chunk_is_empty(self, tmp_path: Path) -> None:
         """Consolidation should be a no-op when the selected chunk is empty."""
-        store = MemoryStore(tmp_path)
+        store = SqliteMemoryStore(tmp_path)
         provider = AsyncMock()
         provider.chat_with_retry = provider.chat
         messages: list[dict] = []
@@ -166,7 +165,7 @@ class TestMemoryConsolidationTypeHandling:
     @pytest.mark.asyncio
     async def test_list_arguments_extracts_first_dict(self, tmp_path: Path) -> None:
         """Some providers return arguments as a list - extract first element if it's a dict."""
-        store = MemoryStore(tmp_path)
+        store = SqliteMemoryStore(tmp_path)
         provider = AsyncMock()
 
         response = LLMResponse(
@@ -189,13 +188,13 @@ class TestMemoryConsolidationTypeHandling:
         result = await store.consolidate(messages, provider, "test-model")
 
         assert result is True
-        assert "User discussed testing." in store.history_file.read_text()
-        assert "User likes testing." in store.memory_file.read_text()
+        assert "User discussed testing." in store.read_history()
+        assert "User likes testing." in store.read_long_term()
 
     @pytest.mark.asyncio
     async def test_list_arguments_empty_list_returns_false(self, tmp_path: Path) -> None:
         """Empty list arguments should return False."""
-        store = MemoryStore(tmp_path)
+        store = SqliteMemoryStore(tmp_path)
         provider = AsyncMock()
 
         response = LLMResponse(
@@ -219,7 +218,7 @@ class TestMemoryConsolidationTypeHandling:
     @pytest.mark.asyncio
     async def test_list_arguments_non_dict_content_returns_false(self, tmp_path: Path) -> None:
         """List with non-dict content should return False."""
-        store = MemoryStore(tmp_path)
+        store = SqliteMemoryStore(tmp_path)
         provider = AsyncMock()
 
         response = LLMResponse(
@@ -243,7 +242,7 @@ class TestMemoryConsolidationTypeHandling:
     @pytest.mark.asyncio
     async def test_missing_history_entry_returns_false_without_writing(self, tmp_path: Path) -> None:
         """Do not persist partial results when required fields are missing."""
-        store = MemoryStore(tmp_path)
+        store = SqliteMemoryStore(tmp_path)
         provider = AsyncMock()
         provider.chat_with_retry = AsyncMock(
             return_value=LLMResponse(
@@ -262,13 +261,13 @@ class TestMemoryConsolidationTypeHandling:
         result = await store.consolidate(messages, provider, "test-model")
 
         assert result is False
-        assert not store.history_file.exists()
-        assert not store.memory_file.exists()
+        assert store.read_history() == ""
+        assert store.read_long_term() == ""
 
     @pytest.mark.asyncio
     async def test_missing_memory_update_returns_false_without_writing(self, tmp_path: Path) -> None:
         """Do not append history if memory_update is missing."""
-        store = MemoryStore(tmp_path)
+        store = SqliteMemoryStore(tmp_path)
         provider = AsyncMock()
         provider.chat_with_retry = AsyncMock(
             return_value=LLMResponse(
@@ -287,13 +286,13 @@ class TestMemoryConsolidationTypeHandling:
         result = await store.consolidate(messages, provider, "test-model")
 
         assert result is False
-        assert not store.history_file.exists()
-        assert not store.memory_file.exists()
+        assert store.read_history() == ""
+        assert store.read_long_term() == ""
 
     @pytest.mark.asyncio
     async def test_null_required_field_returns_false_without_writing(self, tmp_path: Path) -> None:
         """Null required fields should be rejected before persistence."""
-        store = MemoryStore(tmp_path)
+        store = SqliteMemoryStore(tmp_path)
         provider = AsyncMock()
         provider.chat_with_retry = AsyncMock(
             return_value=_make_tool_response(
@@ -306,13 +305,13 @@ class TestMemoryConsolidationTypeHandling:
         result = await store.consolidate(messages, provider, "test-model")
 
         assert result is False
-        assert not store.history_file.exists()
-        assert not store.memory_file.exists()
+        assert store.read_history() == ""
+        assert store.read_long_term() == ""
 
     @pytest.mark.asyncio
     async def test_empty_history_entry_returns_false_without_writing(self, tmp_path: Path) -> None:
         """Empty history entries should be rejected to avoid blank archival records."""
-        store = MemoryStore(tmp_path)
+        store = SqliteMemoryStore(tmp_path)
         provider = AsyncMock()
         provider.chat_with_retry = AsyncMock(
             return_value=_make_tool_response(
@@ -325,12 +324,12 @@ class TestMemoryConsolidationTypeHandling:
         result = await store.consolidate(messages, provider, "test-model")
 
         assert result is False
-        assert not store.history_file.exists()
-        assert not store.memory_file.exists()
+        assert store.read_history() == ""
+        assert store.read_long_term() == ""
 
     @pytest.mark.asyncio
     async def test_retries_transient_error_then_succeeds(self, tmp_path: Path, monkeypatch) -> None:
-        store = MemoryStore(tmp_path)
+        store = SqliteMemoryStore(tmp_path)
         provider = ScriptedProvider([
             LLMResponse(content="503 server error", finish_reason="error"),
             _make_tool_response(
@@ -354,8 +353,8 @@ class TestMemoryConsolidationTypeHandling:
 
     @pytest.mark.asyncio
     async def test_consolidation_delegates_to_provider_defaults(self, tmp_path: Path) -> None:
-        """Consolidation no longer passes generation params — the provider owns them."""
-        store = MemoryStore(tmp_path)
+        """Consolidation no longer passes generation params -- the provider owns them."""
+        store = SqliteMemoryStore(tmp_path)
         provider = AsyncMock()
         provider.chat_with_retry = AsyncMock(
             return_value=_make_tool_response(
@@ -378,7 +377,7 @@ class TestMemoryConsolidationTypeHandling:
     @pytest.mark.asyncio
     async def test_tool_choice_fallback_on_unsupported_error(self, tmp_path: Path) -> None:
         """Forced tool_choice rejected by provider -> retry with auto and succeed."""
-        store = MemoryStore(tmp_path)
+        store = SqliteMemoryStore(tmp_path)
         error_resp = LLMResponse(
             content="Error calling LLM: BadRequestError: "
             "The tool_choice parameter does not support being set to required or object",
@@ -406,12 +405,12 @@ class TestMemoryConsolidationTypeHandling:
         assert len(call_log) == 2
         assert isinstance(call_log[0]["tool_choice"], dict)
         assert call_log[1]["tool_choice"] == "auto"
-        assert "Fallback worked." in store.history_file.read_text()
+        assert "Fallback worked." in store.read_history()
 
     @pytest.mark.asyncio
     async def test_tool_choice_fallback_auto_no_tool_call(self, tmp_path: Path) -> None:
         """Forced rejected, auto retry also produces no tool call -> return False."""
-        store = MemoryStore(tmp_path)
+        store = SqliteMemoryStore(tmp_path)
         error_resp = LLMResponse(
             content="Error: tool_choice must be none or auto",
             finish_reason="error",
@@ -430,12 +429,12 @@ class TestMemoryConsolidationTypeHandling:
         result = await store.consolidate(messages, provider, "test-model")
 
         assert result is False
-        assert not store.history_file.exists()
+        assert store.read_history() == ""
 
     @pytest.mark.asyncio
     async def test_raw_archive_after_consecutive_failures(self, tmp_path: Path) -> None:
         """After 3 consecutive failures, raw-archive messages and return True."""
-        store = MemoryStore(tmp_path)
+        store = SqliteMemoryStore(tmp_path)
         no_tool = LLMResponse(content="No tool call.", finish_reason="stop", tool_calls=[])
         provider = AsyncMock()
         provider.chat_with_retry = AsyncMock(return_value=no_tool)
@@ -445,17 +444,16 @@ class TestMemoryConsolidationTypeHandling:
         assert await store.consolidate(messages, provider, "m") is False
         assert await store.consolidate(messages, provider, "m") is True
 
-        assert store.history_file.exists()
-        content = store.history_file.read_text()
+        content = store.read_history()
         assert "[RAW]" in content
         assert "10 messages" in content
         assert "msg0" in content
-        assert not store.memory_file.exists()
+        assert store.read_long_term() == ""
 
     @pytest.mark.asyncio
     async def test_raw_archive_counter_resets_on_success(self, tmp_path: Path) -> None:
         """A successful consolidation resets the failure counter."""
-        store = MemoryStore(tmp_path)
+        store = SqliteMemoryStore(tmp_path)
         no_tool = LLMResponse(content="Nope.", finish_reason="stop", tool_calls=[])
         ok_resp = _make_tool_response(
             history_entry="[2026-01-01] OK.",
@@ -467,12 +465,12 @@ class TestMemoryConsolidationTypeHandling:
         provider.chat_with_retry = AsyncMock(return_value=no_tool)
         assert await store.consolidate(messages, provider, "m") is False
         assert await store.consolidate(messages, provider, "m") is False
-        assert store._consecutive_failures == 2
+        assert store._failures.get("global", 0) == 2
 
         provider.chat_with_retry = AsyncMock(return_value=ok_resp)
         assert await store.consolidate(messages, provider, "m") is True
-        assert store._consecutive_failures == 0
+        assert store._failures.get("global", 0) == 0
 
         provider.chat_with_retry = AsyncMock(return_value=no_tool)
         assert await store.consolidate(messages, provider, "m") is False
-        assert store._consecutive_failures == 1
+        assert store._failures.get("global", 0) == 1

@@ -482,7 +482,8 @@ class AgentLoop:
             logger.info("Processing system message from {}", msg.sender_id)
             key = f"{channel}:{chat_id}"
             session = self.sessions.get_or_create(key)
-            await self.memory_consolidator.maybe_consolidate_by_tokens(session)
+            topic_name = msg.metadata.get("topic_name")
+            await self.memory_consolidator.maybe_consolidate_by_tokens(session, topic_name=topic_name)
             self._set_tool_context(
                 channel,
                 chat_id,
@@ -509,7 +510,9 @@ class AgentLoop:
             )
             self._save_turn(session, all_msgs, 1 + len(history))
             self.sessions.save(session)
-            self._schedule_background(self.memory_consolidator.maybe_consolidate_by_tokens(session))
+            self._schedule_background(
+                self.memory_consolidator.maybe_consolidate_by_tokens(session, topic_name=topic_name)
+            )
             return OutboundMessage(
                 channel=channel,
                 chat_id=chat_id,
@@ -528,7 +531,8 @@ class AgentLoop:
         if result := await self.commands.dispatch(ctx):
             return result
 
-        await self.memory_consolidator.maybe_consolidate_by_tokens(session)
+        topic_name = msg.metadata.get("topic_name")
+        await self.memory_consolidator.maybe_consolidate_by_tokens(session, topic_name=topic_name)
 
         self._set_tool_context(
             msg.channel,
@@ -585,7 +589,9 @@ class AgentLoop:
 
         self._save_turn(session, all_msgs, 1 + len(history))
         self.sessions.save(session)
-        self._schedule_background(self.memory_consolidator.maybe_consolidate_by_tokens(session))
+        self._schedule_background(
+            self.memory_consolidator.maybe_consolidate_by_tokens(session, topic_name=topic_name)
+        )
 
         if (mt := self.tools.get("message")) and isinstance(mt, MessageTool) and mt._sent_in_turn:
             return None
