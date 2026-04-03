@@ -1,7 +1,9 @@
 """Tests for SqliteMemoryStore."""
 import pytest
 from pathlib import Path
+from unittest.mock import AsyncMock
 from nanobot.agent.memory import SqliteMemoryStore
+from nanobot.providers.base import LLMResponse, ToolCallRequest
 
 
 class TestSqliteMemoryStoreGlobalCRUD:
@@ -100,3 +102,66 @@ class TestSqliteMemoryStoreTopicCRUD:
         store.write_topic_memory("677", "b")
         topics = store.list_topics()
         assert set(topics) == {"558", "677"}
+
+
+class TestSqliteMemoryStoreConsolidation:
+    @pytest.mark.asyncio
+    async def test_consolidate_global_writes_to_db(self, tmp_path: Path):
+        store = SqliteMemoryStore(tmp_path)
+        provider = AsyncMock()
+        provider.chat_with_retry = AsyncMock(
+            return_value=LLMResponse(
+                content=None,
+                tool_calls=[ToolCallRequest(
+                    id="c1", name="save_memory",
+                    arguments={"history_entry": "[2026-01-01] Event.", "memory_update": "# Mem\nFact."},
+                )],
+            )
+        )
+        result = await store.consolidate(
+            [{"role": "user", "content": "hello", "timestamp": "2026-01-01"}],
+            provider, "model",
+        )
+        assert result is True
+        assert store.read_long_term() == "# Mem\nFact."
+        assert "Event." in store.read_history()
+
+    @pytest.mark.asyncio
+    async def test_consolidate_topic_writes_to_topic_tables(self, tmp_path: Path):
+        store = SqliteMemoryStore(tmp_path)
+        provider = AsyncMock()
+        provider.chat_with_retry = AsyncMock(
+            return_value=LLMResponse(
+                content=None,
+                tool_calls=[ToolCallRequest(
+                    id="c1", name="save_memory",
+                    arguments={"history_entry": "[2026-01-01] Topic event.", "memory_update": "# Topic\nFact."},
+                )],
+            )
+        )
+        result = await store.consolidate_topic(
+            "558",
+            [{"role": "user", "content": "hello", "timestamp": "2026-01-01"}],
+            provider, "model",
+        )
+        assert result is True
+        assert store.read_topic_memory("558") == "# Topic\nFact."
+        assert "Topic event." in store.read_topic_history("558")
+        assert store.read_long_term() == ""
+
+    @pytest.mark.asyncio
+    async def test_consolidate_topic_does_not_affect_other_topics(self, tmp_path: Path):
+        store = SqliteMemoryStore(tmp_path)
+        store.write_topic_memory("677", "Dev data")
+        provider = AsyncMock()
+        provider.chat_with_retry = AsyncMock(
+            return_value=LLMResponse(
+                content=None,
+                tool_calls=[ToolCallRequest(
+                    id="c1", name="save_memory",
+                    arguments={"history_entry": "[2026-01-01] Finance.", "memory_update": "# Finance"},
+                )],
+            )
+        )
+        await store.consolidate_topic("558", [{"role": "user", "content": "x", "timestamp": "t"}], provider, "m")
+        assert store.read_topic_memory("677") == "Dev data"

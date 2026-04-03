@@ -174,6 +174,96 @@ class SqliteMemoryStore:
             rows = conn.execute("SELECT topic FROM topic_memory ORDER BY topic").fetchall()
         return [r[0] for r in rows]
 
+    # ── Consolidation ──────────────────────────────────────────────
+
+    _MAX_FAILURES = 3
+
+    def _failure_key(self, topic: str | None) -> str:
+        return topic if topic else "global"
+
+    async def consolidate(self, messages: list[dict], provider, model: str) -> bool:
+        return await self._do_consolidate(None, messages, provider, model)
+
+    async def consolidate_topic(self, topic: str, messages: list[dict], provider, model: str) -> bool:
+        return await self._do_consolidate(topic, messages, provider, model)
+
+    async def _do_consolidate(self, topic: str | None, messages: list[dict], provider, model: str) -> bool:
+        if not messages:
+            return True
+
+        current = self.read_topic_memory(topic) if topic else self.read_long_term()
+        prompt = f"""Process this conversation and call the save_memory tool with your consolidation.
+
+## Current {"Topic" if topic else "Long-term"} Memory
+{current or "(empty)"}
+
+## Conversation to Process
+{MemoryStore._format_messages(messages)}"""
+
+        chat_messages = [
+            {"role": "system", "content": "You are a memory consolidation agent. Call the save_memory tool."},
+            {"role": "user", "content": prompt},
+        ]
+
+        try:
+            forced = {"type": "function", "function": {"name": "save_memory"}}
+            response = await provider.chat_with_retry(
+                messages=chat_messages, tools=_SAVE_MEMORY_TOOL, model=model, tool_choice=forced,
+            )
+
+            if response.finish_reason == "error" and _is_tool_choice_unsupported(response.content):
+                response = await provider.chat_with_retry(
+                    messages=chat_messages, tools=_SAVE_MEMORY_TOOL, model=model, tool_choice="auto",
+                )
+
+            if not response.has_tool_calls:
+                return self._fail_or_raw_archive(topic, messages)
+
+            args = _normalize_save_memory_args(response.tool_calls[0].arguments)
+            if not args or "history_entry" not in args or "memory_update" not in args:
+                return self._fail_or_raw_archive(topic, messages)
+
+            entry = _ensure_text(args["history_entry"]).strip()
+            update = _ensure_text(args["memory_update"])
+
+            if not entry or args["history_entry"] is None or args["memory_update"] is None:
+                return self._fail_or_raw_archive(topic, messages)
+
+            if topic:
+                self.append_topic_history(topic, entry)
+                if update != current:
+                    self.write_topic_memory(topic, update)
+            else:
+                self.append_history(entry)
+                if update != current:
+                    self.write_long_term(update)
+
+            self._failures[self._failure_key(topic)] = 0
+            return True
+        except Exception:
+            logger.exception("Memory consolidation failed")
+            return self._fail_or_raw_archive(topic, messages)
+
+    def _fail_or_raw_archive(self, topic: str | None, messages: list[dict]) -> bool:
+        key = self._failure_key(topic)
+        self._failures[key] = self._failures.get(key, 0) + 1
+        if self._failures[key] < self._MAX_FAILURES:
+            return False
+        self._raw_archive(topic, messages)
+        self._failures[key] = 0
+        return True
+
+    def _raw_archive(self, topic: str | None, messages: list[dict]) -> None:
+        from datetime import datetime
+
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+        raw = f"[{ts}] [RAW] {len(messages)} messages\n{MemoryStore._format_messages(messages)}"
+        if topic:
+            self.append_topic_history(topic, raw)
+        else:
+            self.append_history(raw)
+        logger.warning("Raw-archived {} messages for {}", len(messages), topic or "global")
+
 
 class MemoryStore:
     """Two-layer memory: MEMORY.md (long-term facts) + HISTORY.md (grep-searchable log)."""
