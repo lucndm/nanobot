@@ -509,6 +509,37 @@ def _migrate_cron_store(config: "Config") -> None:
 # ============================================================================
 
 
+def pick_heartbeat_target(
+    enabled_channels: list[str],
+    session_manager: Any,
+) -> tuple[str, str, int | None]:
+    """Pick a routable channel/chat target for heartbeat-triggered messages.
+
+    Returns (channel, chat_id, message_thread_id).  Session keys for
+    Telegram group topics look like ``telegram:-100xxx:topic:42`` – we
+    strip the ``:topic:`` suffix so the caller gets a clean integer-safe
+    chat_id and the topic thread_id separately.
+    """
+    enabled = set(enabled_channels)
+    for item in session_manager.list_sessions():
+        key = item.get("key") or ""
+        if ":" not in key:
+            continue
+        channel, chat_id = key.split(":", 1)
+        if channel in {"cli", "system"}:
+            continue
+        if channel in enabled and chat_id:
+            thread_id: int | None = None
+            if ":topic:" in chat_id:
+                chat_id, tid_str = chat_id.rsplit(":topic:", 1)
+                try:
+                    thread_id = int(tid_str)
+                except ValueError:
+                    pass
+            return channel, chat_id, thread_id
+    return "cli", "direct", None
+
+
 @app.command()
 def gateway(
     port: int | None = typer.Option(None, "--port", "-p", help="Gateway port"),
@@ -645,26 +676,13 @@ def gateway(
     # Create channel manager
     channels = ChannelManager(config, bus)
 
-    def _pick_heartbeat_target() -> tuple[str, str]:
-        """Pick a routable channel/chat target for heartbeat-triggered messages."""
-        enabled = set(channels.enabled_channels)
-        # Prefer the most recently updated non-internal session on an enabled channel.
-        for item in session_manager.list_sessions():
-            key = item.get("key") or ""
-            if ":" not in key:
-                continue
-            channel, chat_id = key.split(":", 1)
-            if channel in {"cli", "system"}:
-                continue
-            if channel in enabled and chat_id:
-                return channel, chat_id
-        # Fallback keeps prior behavior but remains explicit.
-        return "cli", "direct"
+    def _pick_heartbeat_target() -> tuple[str, str, int | None]:
+        return pick_heartbeat_target(channels.enabled_channels, session_manager)
 
     # Create heartbeat service
     async def on_heartbeat_execute(tasks: str) -> str:
         """Phase 2: execute heartbeat tasks through the full agent loop."""
-        channel, chat_id = _pick_heartbeat_target()
+        channel, chat_id, _thread_id = _pick_heartbeat_target()
 
         async def _silent(*_args, **_kwargs):
             pass
@@ -689,11 +707,16 @@ def gateway(
         """Deliver a heartbeat response to the user's channel."""
         from nanobot.bus.events import OutboundMessage
 
-        channel, chat_id = _pick_heartbeat_target()
+        channel, chat_id, thread_id = _pick_heartbeat_target()
         if channel == "cli":
             return  # No external channel available to deliver to
+        metadata: dict[str, Any] = {}
+        if thread_id is not None:
+            metadata["message_thread_id"] = thread_id
         await bus.publish_outbound(
-            OutboundMessage(channel=channel, chat_id=chat_id, content=response)
+            OutboundMessage(
+                channel=channel, chat_id=chat_id, content=response, metadata=metadata
+            )
         )
 
     hb_cfg = config.gateway.heartbeat

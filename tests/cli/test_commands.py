@@ -642,6 +642,69 @@ def test_heartbeat_retains_recent_messages_by_default():
     assert config.gateway.heartbeat.keep_recent_messages == 8
 
 
+class TestPickHeartbeatTarget:
+    """Tests for the extracted pick_heartbeat_target helper."""
+
+    @staticmethod
+    def _make_manager(sessions: list[dict[str, str]]) -> object:
+        class _M:
+            def list_sessions(self) -> list[dict[str, str]]:
+                return sessions
+
+        return _M()
+
+    def test_no_sessions_returns_cli_fallback(self) -> None:
+        from nanobot.cli.commands import pick_heartbeat_target
+
+        mgr = self._make_manager([])
+        assert pick_heartbeat_target(["telegram"], mgr) == ("cli", "direct", None)
+
+    def test_skips_cli_and_system_sessions(self) -> None:
+        from nanobot.cli.commands import pick_heartbeat_target
+
+        mgr = self._make_manager([{"key": "cli:direct"}, {"key": "system:heartbeat"}])
+        assert pick_heartbeat_target(["telegram"], mgr) == ("cli", "direct", None)
+
+    def test_picks_first_enabled_channel_session(self) -> None:
+        from nanobot.cli.commands import pick_heartbeat_target
+
+        mgr = self._make_manager([{"key": "telegram:164211708"}])
+        assert pick_heartbeat_target(["telegram"], mgr) == ("telegram", "164211708", None)
+
+    def test_ignores_disabled_channel(self) -> None:
+        from nanobot.cli.commands import pick_heartbeat_target
+
+        mgr = self._make_manager([{"key": "discord:12345"}])
+        assert pick_heartbeat_target(["telegram"], mgr) == ("cli", "direct", None)
+
+    def test_strips_topic_suffix_from_session_key(self) -> None:
+        """Regression: session keys like 'telegram:-100xxx:topic:42' must
+        yield a clean integer-safe chat_id and the thread_id separately."""
+        from nanobot.cli.commands import pick_heartbeat_target
+
+        mgr = self._make_manager([{"key": "telegram:-1003738155502:topic:558"}])
+        channel, chat_id, thread_id = pick_heartbeat_target(["telegram"], mgr)
+        assert channel == "telegram"
+        assert chat_id == "-1003738155502"
+        assert thread_id == 558
+
+    def test_topic_with_non_numeric_thread_id(self) -> None:
+        from nanobot.cli.commands import pick_heartbeat_target
+
+        mgr = self._make_manager([{"key": "telegram:-100xxx:topic:notanum"}])
+        channel, chat_id, thread_id = pick_heartbeat_target(["telegram"], mgr)
+        assert chat_id == "-100xxx"
+        assert thread_id is None
+
+    def test_skips_key_without_colon(self) -> None:
+        from nanobot.cli.commands import pick_heartbeat_target
+
+        mgr = self._make_manager([{"key": "nope"}, {"key": "telegram:123"}])
+        channel, chat_id, thread_id = pick_heartbeat_target(["telegram"], mgr)
+        assert channel == "telegram"
+        assert chat_id == "123"
+
+
 def test_gateway_uses_workspace_from_config_by_default(monkeypatch, tmp_path: Path) -> None:
     config_file = tmp_path / "instance" / "config.json"
     config_file.parent.mkdir(parents=True)
