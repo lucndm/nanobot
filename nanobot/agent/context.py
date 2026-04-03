@@ -6,6 +6,8 @@ import platform
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
+
 from nanobot.agent.memory import MemoryStore
 from nanobot.agent.skills import SkillsLoader
 from nanobot.utils.helpers import build_assistant_message, current_time_str, detect_image_mime
@@ -28,11 +30,54 @@ class ContextBuilder:
         self._on_skills_loaded = on_skills_loaded
         self.memory = MemoryStore(workspace)
         self.skills = SkillsLoader(workspace)
+        self._topic_rules_cache: dict[str, str] = {}
+
+    def load_topic_rules(self, topic_name: str | None) -> str | None:
+        """Load topic-specific rules from workspace/topics/{topic_name}/TOPIC.md.
+
+        Results are cached in memory for the lifetime of the process.
+        Returns None if no topic rules file exists.
+        """
+        if not topic_name:
+            return None
+
+        # Normalize: lowercase, replace spaces/special chars with hyphens
+        key = topic_name.lower().replace(" ", "-").replace("_", "-").strip("-")
+
+        if key in self._topic_rules_cache:
+            return self._topic_rules_cache[key]
+
+        topics_dir = self.workspace / "topics"
+        topic_file = topics_dir / key / "TOPIC.md"
+
+        if topic_file.exists():
+            try:
+                content = topic_file.read_text(encoding="utf-8")
+                self._topic_rules_cache[key] = content
+                logger.info("Loaded topic rules: {} -> {}", key, topic_file)
+                return content
+            except Exception as e:
+                logger.warning("Failed to load topic rules for {}: {}", key, e)
+                return None
+
+        logger.debug("No topic rules found for '{}' at {}", topic_name, topic_file)
+        return None
+
+    def invalidate_topic_cache(self, topic_name: str | None = None) -> None:
+        """Invalidate topic rules cache. If topic_name is None, clear all."""
+        if topic_name is None:
+            self._topic_rules_cache.clear()
+        else:
+            key = topic_name.lower().replace(" ", "-").replace("_", "-").strip("-")
+            self._topic_rules_cache.pop(key, None)
 
     def build_system_prompt(
-        self, skill_names: list[str] | None = None, user_mood: str | None = None
+        self,
+        skill_names: list[str] | None = None,
+        user_mood: str | None = None,
+        topic_name: str | None = None,
     ) -> str:
-        """Build the system prompt from identity, bootstrap files, memory, and skills."""
+        """Build the system prompt from identity, bootstrap files, memory, skills, and topic rules."""
         parts = [self._get_identity()]
 
         # Add mood-based response adjustment
@@ -72,6 +117,11 @@ The following skills extend your capabilities. To use a skill, read its SKILL.md
 Skills with available="false" need dependencies installed first - you can try installing them with apt/brew.
 
 {skills_summary}""")
+
+        # Inject topic-specific rules (highest priority — last in prompt)
+        topic_rules = self.load_topic_rules(topic_name)
+        if topic_rules:
+            parts.append(f"# Topic Rules ({topic_name})\n\n{topic_rules}")
 
         return "\n\n---\n\n".join(parts)
 
@@ -155,6 +205,7 @@ IMPORTANT: To send files (images, documents, audio, video) to the user, you MUST
         chat_id: str | None = None,
         current_role: str = "user",
         user_mood: str | None = None,
+        topic_name: str | None = None,
     ) -> list[dict[str, Any]]:
         """Build the complete message list for an LLM call."""
         runtime_ctx = self._build_runtime_context(channel, chat_id, self.timezone)
@@ -168,7 +219,7 @@ IMPORTANT: To send files (images, documents, audio, video) to the user, you MUST
             merged = [{"type": "text", "text": runtime_ctx}] + user_content
 
         return [
-            {"role": "system", "content": self.build_system_prompt(skill_names, user_mood)},
+            {"role": "system", "content": self.build_system_prompt(skill_names, user_mood, topic_name)},
             *history,
             {"role": current_role, "content": merged},
         ]
