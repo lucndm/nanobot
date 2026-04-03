@@ -515,7 +515,7 @@ class AgentLoop:
                 message_thread_id=msg.metadata.get("message_thread_id"),
                 topic_name=msg.metadata.get("topic_name"),
             )
-            self._save_turn(session, all_msgs, 1 + len(history))
+            self._save_turn(session, all_msgs, 1 + len(history), message_id=msg.metadata.get("message_id"))
             self.sessions.save(session)
             self._schedule_background(
                 self.memory_consolidator.maybe_consolidate_by_tokens(session, topic_name=topic_name)
@@ -594,7 +594,7 @@ class AgentLoop:
         if final_content is None:
             final_content = "I've completed processing but have no response to give."
 
-        self._save_turn(session, all_msgs, 1 + len(history))
+        self._save_turn(session, all_msgs, 1 + len(history), message_id=msg.metadata.get("message_id"))
         self.sessions.save(session)
         self._schedule_background(
             self.memory_consolidator.maybe_consolidate_by_tokens(session, topic_name=topic_name)
@@ -661,13 +661,18 @@ class AgentLoop:
 
         return filtered
 
-    def _save_turn(self, session: Session, messages: list[dict], skip: int) -> None:
+    def _save_turn(
+        self, session: Session, messages: list[dict], skip: int, *, message_id: str | None = None
+    ) -> None:
         """Save new-turn messages into session, truncating large tool results."""
         from datetime import datetime
 
         for m in messages[skip:]:
             entry = dict(m)
             role, content = entry.get("role"), entry.get("content")
+            # Persist telegram_message_id on the first user message for reaction linking
+            if role == "user" and message_id and "telegram_message_id" not in entry:
+                entry["telegram_message_id"] = message_id
             if role == "assistant" and not content and not entry.get("tool_calls"):
                 continue  # skip empty assistant messages — they poison session context
             if role == "tool":
