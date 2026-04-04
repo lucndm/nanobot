@@ -351,17 +351,6 @@ class TestSyncWorkspaceTemplates:
 class TestProviderChannelInfo:
     """Tests for provider and channel info retrieval."""
 
-    def test_get_provider_names_returns_dict(self):
-        from nanobot.cli.onboard import _get_provider_names
-
-        names = _get_provider_names()
-        assert isinstance(names, dict)
-        assert len(names) > 0
-        # Should include common providers
-        assert "openai" in names or "anthropic" in names
-        assert "openai_codex" not in names
-        assert "github_copilot" not in names
-
     def test_get_channel_names_returns_dict(self):
         from nanobot.cli.onboard import _get_channel_names
 
@@ -369,16 +358,6 @@ class TestProviderChannelInfo:
         assert isinstance(names, dict)
         # Should include at least some channels
         assert len(names) >= 0
-
-    def test_get_provider_info_returns_valid_structure(self):
-        from nanobot.cli.onboard import _get_provider_info
-
-        info = _get_provider_info()
-        assert isinstance(info, dict)
-        # Each value should be a tuple with expected structure
-        for provider_name, value in info.items():
-            assert isinstance(value, tuple)
-            assert len(value) == 4  # (display_name, needs_api_key, needs_api_base, env_var)
 
 
 class _SimpleDraftModel(BaseModel):

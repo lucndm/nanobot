@@ -143,7 +143,7 @@ Skills with available="false" need dependencies installed first - you can try in
             # Topic could not be resolved — instruct the bot to ask the user
             parts.append(
                 "# Topic\n\nYou do NOT know which topic this conversation belongs to. "
-                "Ask the user: \"Which topic is this?\" Do NOT guess or assume. "
+                'Ask the user: "Which topic is this?" Do NOT guess or assume. '
                 "Wait for their answer before applying any topic rules."
             )
 
@@ -245,7 +245,9 @@ IMPORTANT: To send files (images, documents, audio, video) to the user, you MUST
         return [
             {
                 "role": "system",
-                "content": self.build_system_prompt(skill_names, user_mood, topic_name, topic_resolved),
+                "content": self.build_system_prompt(
+                    skill_names, user_mood, topic_name, topic_resolved
+                ),
             },
             *history,
             {"role": current_role, "content": merged},

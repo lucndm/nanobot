@@ -1,5 +1,6 @@
 """Configuration schema using Pydantic."""
 
+import os
 from pathlib import Path
 from typing import Literal
 
@@ -25,7 +26,7 @@ class ChannelsConfig(Base):
     model_config = ConfigDict(extra="allow")
 
     send_progress: bool = True  # stream agent's text progress to the channel
-    send_tool_hints: bool = False  # stream tool-call hints (e.g. read_file("…"))
+    send_tool_hints: bool = False  # stream tool-call hints (e.g. read_file("..."))
     send_max_retries: int = Field(
         default=3, ge=0, le=10
     )  # Max delivery attempts (initial send included)
@@ -44,8 +45,6 @@ class AgentDefaults(Base):
     temperature: float = 0.1
     max_tool_iterations: int = 40
     reasoning_effort: str | None = None  # low / medium / high - enables LLM thinking mode
-    fallback_model: str | None = None  # e.g. "openrouter/free"
-    fallback_provider: str | None = None  # e.g. "openrouter" or "auto"
     timezone: str = "UTC"  # IANA timezone, e.g. "Asia/Shanghai", "America/New_York"
 
 
@@ -53,56 +52,6 @@ class AgentsConfig(Base):
     """Agent configuration."""
 
     defaults: AgentDefaults = Field(default_factory=AgentDefaults)
-
-
-class ProviderConfig(Base):
-    """LLM provider configuration."""
-
-    api_key: str = ""
-    api_base: str | None = None
-    extra_headers: dict[str, str] | None = None  # Custom headers (e.g. APP-Code for AiHubMix)
-
-
-class ProvidersConfig(Base):
-    """Configuration for LLM providers."""
-
-    custom: ProviderConfig = Field(default_factory=ProviderConfig)  # Any OpenAI-compatible endpoint
-    azure_openai: ProviderConfig = Field(
-        default_factory=ProviderConfig
-    )  # Azure OpenAI (model = deployment name)
-    anthropic: ProviderConfig = Field(default_factory=ProviderConfig)
-    openai: ProviderConfig = Field(default_factory=ProviderConfig)
-    openrouter: ProviderConfig = Field(default_factory=ProviderConfig)
-    deepseek: ProviderConfig = Field(default_factory=ProviderConfig)
-    groq: ProviderConfig = Field(default_factory=ProviderConfig)
-    zhipu: ProviderConfig = Field(default_factory=ProviderConfig)
-    dashscope: ProviderConfig = Field(default_factory=ProviderConfig)
-    vllm: ProviderConfig = Field(default_factory=ProviderConfig)
-    ollama: ProviderConfig = Field(default_factory=ProviderConfig)  # Ollama local models
-    ovms: ProviderConfig = Field(default_factory=ProviderConfig)  # OpenVINO Model Server (OVMS)
-    gemini: ProviderConfig = Field(default_factory=ProviderConfig)
-    moonshot: ProviderConfig = Field(default_factory=ProviderConfig)
-    minimax: ProviderConfig = Field(default_factory=ProviderConfig)
-    mistral: ProviderConfig = Field(default_factory=ProviderConfig)
-    stepfun: ProviderConfig = Field(default_factory=ProviderConfig)  # Step Fun (阶跃星辰)
-    aihubmix: ProviderConfig = Field(default_factory=ProviderConfig)  # AiHubMix API gateway
-    siliconflow: ProviderConfig = Field(default_factory=ProviderConfig)  # SiliconFlow (硅基流动)
-    volcengine: ProviderConfig = Field(default_factory=ProviderConfig)  # VolcEngine (火山引擎)
-    volcengine_coding_plan: ProviderConfig = Field(
-        default_factory=ProviderConfig
-    )  # VolcEngine Coding Plan
-    byteplus: ProviderConfig = Field(
-        default_factory=ProviderConfig
-    )  # BytePlus (VolcEngine international)
-    byteplus_coding_plan: ProviderConfig = Field(
-        default_factory=ProviderConfig
-    )  # BytePlus Coding Plan
-    openai_codex: ProviderConfig = Field(
-        default_factory=ProviderConfig, exclude=True
-    )  # OpenAI Codex (OAuth)
-    github_copilot: ProviderConfig = Field(
-        default_factory=ProviderConfig, exclude=True
-    )  # Github Copilot (OAuth)
 
 
 class HeartbeatConfig(Base):
@@ -197,115 +146,80 @@ class DatabaseConfig(Base):
     sqlite_path: str = "data/memories.db"
 
 
+class LiteLLMModelConfig(Base):
+    """A single model entry for litellm Router."""
+
+    model_name: str
+    litellm_params: dict[str, str]
+
+
+class LiteLLMConfig(Base):
+    """LiteLLM client configuration.
+
+    Supports two modes:
+    - proxy: calls go through a litellm proxy server (api_base required)
+    - direct: calls go through an in-process litellm Router (models required)
+    Proxy is primary; direct is used when proxy is unavailable.
+    """
+
+    api_base: str | None = None
+    api_key: str | None = None
+    groq_api_key: str = ""  # Groq API key for transcription
+    models: list[LiteLLMModelConfig] = Field(default_factory=list)
+    fallbacks: list[dict[str, list[str]]] = Field(default_factory=list)
+    default_headers: dict[str, str] = Field(default_factory=dict)
+    success_callback: list[str] = Field(default_factory=list)
+    failure_callback: list[str] = Field(default_factory=list)
+    mode: Literal["proxy", "direct"] | None = None
+
+    def model_post_init(self, __context: object) -> None:
+        # Auto-detect mode: proxy if api_base set, direct if models configured, else proxy
+        if self.mode is None:
+            if self.api_base:
+                self.mode = "proxy"
+            elif self.models:
+                self.mode = "direct"
+            else:
+                self.mode = "proxy"
+
+        # Resolve ${ENV_VAR} in api_key
+        if self.api_key and self.api_key.startswith("${") and self.api_key.endswith("}"):
+            env_var = self.api_key[2:-1]
+            self.api_key = os.environ.get(env_var, "")
+
+        # Resolve ${ENV_VAR} in groq_api_key
+        if (
+            self.groq_api_key
+            and self.groq_api_key.startswith("${")
+            and self.groq_api_key.endswith("}")
+        ):
+            env_var = self.groq_api_key[2:-1]
+            self.groq_api_key = os.environ.get(env_var, "")
+
+        # Resolve ${ENV_VAR} in model litellm_params api_key
+        for model in self.models:
+            params = model.litellm_params
+            if "api_key" in params:
+                val = params["api_key"]
+                if isinstance(val, str) and val.startswith("${") and val.endswith("}"):
+                    env_var = val[2:-1]
+                    params["api_key"] = os.environ.get(env_var, "")
+
+
 class Config(BaseSettings):
     """Root configuration for nanobot."""
 
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
-    providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     otel: OtelConfig = Field(default_factory=OtelConfig)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
+    litellm: LiteLLMConfig = Field(default_factory=LiteLLMConfig)
 
     @property
     def workspace_path(self) -> Path:
         """Get expanded workspace path."""
         return Path(self.agents.defaults.workspace).expanduser()
-
-    def _match_provider(
-        self, model: str | None = None
-    ) -> tuple["ProviderConfig | None", str | None]:
-        """Match provider config and its registry name. Returns (config, spec_name)."""
-        from nanobot.providers.registry import PROVIDERS, find_by_name
-
-        forced = self.agents.defaults.provider
-        if forced != "auto":
-            spec = find_by_name(forced)
-            if spec:
-                p = getattr(self.providers, spec.name, None)
-                return (p, spec.name) if p else (None, None)
-            return None, None
-
-        model_lower = (model or self.agents.defaults.model).lower()
-        model_normalized = model_lower.replace("-", "_")
-        model_prefix = model_lower.split("/", 1)[0] if "/" in model_lower else ""
-        normalized_prefix = model_prefix.replace("-", "_")
-
-        def _kw_matches(kw: str) -> bool:
-            kw = kw.lower()
-            return kw in model_lower or kw.replace("-", "_") in model_normalized
-
-        # Explicit provider prefix wins — prevents `github-copilot/...codex` matching openai_codex.
-        for spec in PROVIDERS:
-            p = getattr(self.providers, spec.name, None)
-            if p and model_prefix and normalized_prefix == spec.name:
-                if spec.is_oauth or spec.is_local or p.api_key:
-                    return p, spec.name
-
-        # Match by keyword (order follows PROVIDERS registry)
-        for spec in PROVIDERS:
-            p = getattr(self.providers, spec.name, None)
-            if p and any(_kw_matches(kw) for kw in spec.keywords):
-                if spec.is_oauth or spec.is_local or p.api_key:
-                    return p, spec.name
-
-        # Fallback: configured local providers can route models without
-        # provider-specific keywords (for example plain "llama3.2" on Ollama).
-        # Prefer providers whose detect_by_base_keyword matches the configured api_base
-        # (e.g. Ollama's "11434" in "http://localhost:11434") over plain registry order.
-        local_fallback: tuple[ProviderConfig, str] | None = None
-        for spec in PROVIDERS:
-            if not spec.is_local:
-                continue
-            p = getattr(self.providers, spec.name, None)
-            if not (p and p.api_base):
-                continue
-            if spec.detect_by_base_keyword and spec.detect_by_base_keyword in p.api_base:
-                return p, spec.name
-            if local_fallback is None:
-                local_fallback = (p, spec.name)
-        if local_fallback:
-            return local_fallback
-
-        # Fallback: gateways first, then others (follows registry order)
-        # OAuth providers are NOT valid fallbacks — they require explicit model selection
-        for spec in PROVIDERS:
-            if spec.is_oauth:
-                continue
-            p = getattr(self.providers, spec.name, None)
-            if p and p.api_key:
-                return p, spec.name
-        return None, None
-
-    def get_provider(self, model: str | None = None) -> ProviderConfig | None:
-        """Get matched provider config (api_key, api_base, extra_headers). Falls back to first available."""
-        p, _ = self._match_provider(model)
-        return p
-
-    def get_provider_name(self, model: str | None = None) -> str | None:
-        """Get the registry name of the matched provider (e.g. "deepseek", "openrouter")."""
-        _, name = self._match_provider(model)
-        return name
-
-    def get_api_key(self, model: str | None = None) -> str | None:
-        """Get API key for the given model. Falls back to first available key."""
-        p = self.get_provider(model)
-        return p.api_key if p else None
-
-    def get_api_base(self, model: str | None = None) -> str | None:
-        """Get API base URL for the given model. Applies default URLs for gateway/local providers."""
-        from nanobot.providers.registry import find_by_name
-
-        p, name = self._match_provider(model)
-        if p and p.api_base:
-            return p.api_base
-        # Only gateways get a default api_base here. Standard providers
-        # resolve their base URL from the registry in the provider constructor.
-        if name:
-            spec = find_by_name(name)
-            if spec and (spec.is_gateway or spec.is_local) and spec.default_api_base:
-                return spec.default_api_base
-        return None
 
     model_config = ConfigDict(env_prefix="NANOBOT_", env_nested_delimiter="__")

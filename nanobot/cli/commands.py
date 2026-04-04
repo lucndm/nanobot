@@ -382,102 +382,19 @@ def _onboard_plugins(config_path: Path) -> None:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 
-def _create_provider(config: Config, model: str, provider_name: str | None = None):
-    """Create a single LLM provider instance for the given model.
-
-    If *provider_name* is given, it is used directly instead of
-    ``config.get_provider_name(model)`` (which is driven by
-    ``agents.defaults.provider`` and keyword matching).
-    """
-    from nanobot.providers.registry import find_by_name
-
-    resolved_name = provider_name or config.get_provider_name(model)
-    p = config.get_provider(model)
-    spec = find_by_name(resolved_name) if resolved_name else None
-    backend = spec.backend if spec else "openai_compat"
-
-    # --- validation ---
-    if backend == "azure_openai":
-        if not p or not p.api_key or not p.api_base:
-            console.print("[red]Error: Azure OpenAI requires api_key and api_base.[/red]")
-            console.print("Set them in ~/.nanobot/config.json under providers.azure_openai section")
-            console.print("Use the model field to specify the deployment name.")
-            raise typer.Exit(1)
-    elif backend == "openai_compat" and not model.startswith("bedrock/"):
-        needs_key = not (p and p.api_key)
-        exempt = spec and (spec.is_oauth or spec.is_local or spec.is_direct)
-        if needs_key and not exempt:
-            console.print("[red]Error: No API key configured.[/red]")
-            console.print("Set one in ~/.nanobot/config.json under providers section")
-            raise typer.Exit(1)
-
-    # --- instantiation by backend ---
-    if backend == "openai_codex":
-        from nanobot.providers.openai_codex_provider import OpenAICodexProvider
-
-        return OpenAICodexProvider(default_model=model)
-    elif backend == "azure_openai":
-        from nanobot.providers.azure_openai_provider import AzureOpenAIProvider
-
-        return AzureOpenAIProvider(
-            api_key=p.api_key,
-            api_base=p.api_base,
-            default_model=model,
-        )
-    elif backend == "anthropic":
-        from nanobot.providers.anthropic_provider import AnthropicProvider
-
-        return AnthropicProvider(
-            api_key=p.api_key if p else None,
-            api_base=config.get_api_base(model),
-            default_model=model,
-            extra_headers=p.extra_headers if p else None,
-        )
-    else:
-        from nanobot.providers.openai_compat_provider import OpenAICompatProvider
-
-        return OpenAICompatProvider(
-            api_key=p.api_key if p else None,
-            api_base=config.get_api_base(model),
-            default_model=model,
-            extra_headers=p.extra_headers if p else None,
-            spec=spec,
-        )
-
-
 def _make_provider(config: Config):
-    """Create the appropriate LLM provider from config.
-
-    Routing is driven by ``ProviderSpec.backend`` in the registry.
-    If ``agents.defaults.fallback_model`` is set, wraps primary in
-    a :class:`FallbackProvider` that delegates to the fallback on error.
-    """
+    """Create LiteLLMProvider from config."""
     from nanobot.providers.base import GenerationSettings
-    from nanobot.providers.fallback_provider import FallbackProvider
+    from nanobot.providers.litellm_provider import LiteLLMProvider
 
     defaults = config.agents.defaults
-    model = defaults.model
-    primary = _create_provider(config, model)
-
-    if defaults.fallback_model:
-        fb_provider_name = defaults.fallback_provider or config.get_provider_name(
-            defaults.fallback_model
-        )
-        fallback = _create_provider(
-            config, defaults.fallback_model, provider_name=fb_provider_name
-        )
-        primary = FallbackProvider(
-            primary=primary,
-            fallback=fallback,
-            fallback_model=defaults.fallback_model,
-        )
-
-    primary.generation = GenerationSettings(
+    provider = LiteLLMProvider(config.litellm, defaults.model)
+    provider.generation = GenerationSettings(
         temperature=defaults.temperature,
         max_tokens=defaults.max_tokens,
         reasoning_effort=defaults.reasoning_effort,
     )
-    return primary
+    return provider
 
 
 def _load_runtime_config(config: str | None = None, workspace: str | None = None) -> Config:
@@ -1259,126 +1176,14 @@ def status():
     )
 
     if config_path.exists():
-        from nanobot.providers.registry import PROVIDERS
-
         console.print(f"Model: {config.agents.defaults.model}")
-
-        # Check API keys from registry
-        for spec in PROVIDERS:
-            p = getattr(config.providers, spec.name, None)
-            if p is None:
-                continue
-            if spec.is_oauth:
-                console.print(f"{spec.label}: [green]✓ (OAuth)[/green]")
-            elif spec.is_local:
-                # Local deployments show api_base instead of api_key
-                if p.api_base:
-                    console.print(f"{spec.label}: [green]✓ {p.api_base}[/green]")
-                else:
-                    console.print(f"{spec.label}: [dim]not set[/dim]")
-            else:
-                has_key = bool(p.api_key)
-                console.print(
-                    f"{spec.label}: {'[green]✓[/green]' if has_key else '[dim]not set[/dim]'}"
-                )
-
-
-# ============================================================================
-# OAuth Login
-# ============================================================================
-
-provider_app = typer.Typer(help="Manage providers")
-app.add_typer(provider_app, name="provider")
-
-
-_LOGIN_HANDLERS: dict[str, callable] = {}
-
-
-def _register_login(name: str):
-    def decorator(fn):
-        _LOGIN_HANDLERS[name] = fn
-        return fn
-
-    return decorator
-
-
-@provider_app.command("login")
-def provider_login(
-    provider: str = typer.Argument(
-        ..., help="OAuth provider (e.g. 'openai-codex', 'github-copilot')"
-    ),
-):
-    """Authenticate with an OAuth provider."""
-    from nanobot.providers.registry import PROVIDERS
-
-    key = provider.replace("-", "_")
-    spec = next((s for s in PROVIDERS if s.name == key and s.is_oauth), None)
-    if not spec:
-        names = ", ".join(s.name.replace("_", "-") for s in PROVIDERS if s.is_oauth)
-        console.print(f"[red]Unknown OAuth provider: {provider}[/red]  Supported: {names}")
-        raise typer.Exit(1)
-
-    handler = _LOGIN_HANDLERS.get(spec.name)
-    if not handler:
-        console.print(f"[red]Login not implemented for {spec.label}[/red]")
-        raise typer.Exit(1)
-
-    console.print(f"{__logo__} OAuth Login - {spec.label}\n")
-    handler()
-
-
-@_register_login("openai_codex")
-def _login_openai_codex() -> None:
-    try:
-        from oauth_cli_kit import get_token, login_oauth_interactive
-
-        token = None
-        try:
-            token = get_token()
-        except Exception:
-            pass
-        if not (token and token.access):
-            console.print("[cyan]Starting interactive OAuth login...[/cyan]\n")
-            token = login_oauth_interactive(
-                print_fn=lambda s: console.print(s),
-                prompt_fn=lambda s: typer.prompt(s),
-            )
-        if not (token and token.access):
-            console.print("[red]✗ Authentication failed[/red]")
-            raise typer.Exit(1)
-        console.print(
-            f"[green]✓ Authenticated with OpenAI Codex[/green]  [dim]{token.account_id}[/dim]"
-        )
-    except ImportError:
-        console.print("[red]oauth_cli_kit not installed. Run: pip install oauth-cli-kit[/red]")
-        raise typer.Exit(1)
-
-
-@_register_login("github_copilot")
-def _login_github_copilot() -> None:
-    import asyncio
-
-    from openai import AsyncOpenAI
-
-    console.print("[cyan]Starting GitHub Copilot device flow...[/cyan]\n")
-
-    async def _trigger():
-        client = AsyncOpenAI(
-            api_key="dummy",
-            base_url="https://api.githubcopilot.com",
-        )
-        await client.chat.completions.create(
-            model="gpt-4o",
-            messages=[{"role": "user", "content": "hi"}],
-            max_tokens=1,
-        )
-
-    try:
-        asyncio.run(_trigger())
-        console.print("[green]✓ Authenticated with GitHub Copilot[/green]")
-    except Exception as e:
-        console.print(f"[red]Authentication error: {e}[/red]")
-        raise typer.Exit(1)
+        litellm_cfg = config.litellm
+        if litellm_cfg.api_base:
+            console.print(f"LiteLLM Proxy: [green]✓ {litellm_cfg.api_base}[/green]")
+        else:
+            console.print("LiteLLM Proxy: [dim]not set[/dim]")
+        if litellm_cfg.models:
+            console.print(f"Direct models: {len(litellm_cfg.models)} configured")
 
 
 if __name__ == "__main__":

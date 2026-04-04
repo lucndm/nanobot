@@ -174,7 +174,7 @@ async def test_manager_loads_plugin_from_dict_config():
         channels=ChannelsConfig.model_validate({
             "fakeplugin": {"enabled": True, "allowFrom": ["*"]},
         }),
-        providers=SimpleNamespace(groq=SimpleNamespace(api_key="")),
+        litellm=SimpleNamespace(groq_api_key=""),
     )
 
     with patch(
@@ -226,7 +226,7 @@ async def test_manager_skips_disabled_plugin():
         channels=ChannelsConfig.model_validate({
             "fakeplugin": {"enabled": False},
         }),
-        providers=SimpleNamespace(groq=SimpleNamespace(api_key="")),
+        litellm=SimpleNamespace(groq_api_key=""),
     )
 
     with patch(
@@ -322,7 +322,7 @@ async def test_send_with_retry_succeeds_first_try():
 
     fake_config = SimpleNamespace(
         channels=ChannelsConfig(send_max_retries=3),
-        providers=SimpleNamespace(groq=SimpleNamespace(api_key="")),
+        litellm=SimpleNamespace(groq_api_key=""),
     )
 
     mgr = ChannelManager.__new__(ChannelManager)
@@ -359,7 +359,7 @@ async def test_send_with_retry_retries_on_failure():
 
     fake_config = SimpleNamespace(
         channels=ChannelsConfig(send_max_retries=3),
-        providers=SimpleNamespace(groq=SimpleNamespace(api_key="")),
+        litellm=SimpleNamespace(groq_api_key=""),
     )
 
     mgr = ChannelManager.__new__(ChannelManager)
@@ -400,7 +400,7 @@ async def test_send_with_retry_no_retry_when_max_is_zero():
 
     fake_config = SimpleNamespace(
         channels=ChannelsConfig(send_max_retries=0),
-        providers=SimpleNamespace(groq=SimpleNamespace(api_key="")),
+        litellm=SimpleNamespace(groq_api_key=""),
     )
 
     mgr = ChannelManager.__new__(ChannelManager)
@@ -441,7 +441,7 @@ async def test_send_with_retry_calls_send_delta():
 
     fake_config = SimpleNamespace(
         channels=ChannelsConfig(send_max_retries=3),
-        providers=SimpleNamespace(groq=SimpleNamespace(api_key="")),
+        litellm=SimpleNamespace(groq_api_key=""),
     )
 
     mgr = ChannelManager.__new__(ChannelManager)
@@ -485,7 +485,7 @@ async def test_send_with_retry_skips_send_when_streamed():
 
     fake_config = SimpleNamespace(
         channels=ChannelsConfig(send_max_retries=3),
-        providers=SimpleNamespace(groq=SimpleNamespace(api_key="")),
+        litellm=SimpleNamespace(groq_api_key=""),
     )
 
     mgr = ChannelManager.__new__(ChannelManager)
@@ -523,7 +523,7 @@ async def test_send_with_retry_propagates_cancelled_error():
 
     fake_config = SimpleNamespace(
         channels=ChannelsConfig(send_max_retries=3),
-        providers=SimpleNamespace(groq=SimpleNamespace(api_key="")),
+        litellm=SimpleNamespace(groq_api_key=""),
     )
 
     mgr = ChannelManager.__new__(ChannelManager)
@@ -560,7 +560,7 @@ async def test_send_with_retry_propagates_cancelled_error_during_sleep():
 
     fake_config = SimpleNamespace(
         channels=ChannelsConfig(send_max_retries=3),
-        providers=SimpleNamespace(groq=SimpleNamespace(api_key="")),
+        litellm=SimpleNamespace(groq_api_key=""),
     )
 
     mgr = ChannelManager.__new__(ChannelManager)
@@ -631,7 +631,7 @@ async def test_validate_allow_from_raises_on_empty_list():
     """_validate_allow_from should raise SystemExit when allow_from is empty list."""
     fake_config = SimpleNamespace(
         channels=ChannelsConfig(),
-        providers=SimpleNamespace(groq=SimpleNamespace(api_key="")),
+        litellm=SimpleNamespace(groq_api_key=""),
     )
 
     mgr = ChannelManager.__new__(ChannelManager)
@@ -650,7 +650,7 @@ async def test_validate_allow_from_passes_with_asterisk():
     """_validate_allow_from should not raise when allow_from contains '*'."""
     fake_config = SimpleNamespace(
         channels=ChannelsConfig(),
-        providers=SimpleNamespace(groq=SimpleNamespace(api_key="")),
+        litellm=SimpleNamespace(groq_api_key=""),
     )
 
     mgr = ChannelManager.__new__(ChannelManager)
@@ -667,7 +667,7 @@ async def test_get_channel_returns_channel_if_exists():
     """get_channel should return the channel if it exists."""
     fake_config = SimpleNamespace(
         channels=ChannelsConfig(),
-        providers=SimpleNamespace(groq=SimpleNamespace(api_key="")),
+        litellm=SimpleNamespace(groq_api_key=""),
     )
 
     mgr = ChannelManager.__new__(ChannelManager)
@@ -685,7 +685,7 @@ async def test_get_status_returns_running_state():
     """get_status should return enabled and running state for each channel."""
     fake_config = SimpleNamespace(
         channels=ChannelsConfig(),
-        providers=SimpleNamespace(groq=SimpleNamespace(api_key="")),
+        litellm=SimpleNamespace(groq_api_key=""),
     )
 
     mgr = ChannelManager.__new__(ChannelManager)
@@ -706,7 +706,7 @@ async def test_enabled_channels_returns_channel_names():
     """enabled_channels should return list of enabled channel names."""
     fake_config = SimpleNamespace(
         channels=ChannelsConfig(),
-        providers=SimpleNamespace(groq=SimpleNamespace(api_key="")),
+        litellm=SimpleNamespace(groq_api_key=""),
     )
 
     mgr = ChannelManager.__new__(ChannelManager)
@@ -730,7 +730,7 @@ async def test_stop_all_cancels_dispatcher_and_stops_channels():
     """stop_all should cancel the dispatch task and stop all channels."""
     fake_config = SimpleNamespace(
         channels=ChannelsConfig(),
-        providers=SimpleNamespace(groq=SimpleNamespace(api_key="")),
+        litellm=SimpleNamespace(groq_api_key=""),
     )
 
     mgr = ChannelManager.__new__(ChannelManager)
@@ -774,7 +774,7 @@ async def test_start_channel_logs_error_on_failure():
 
     fake_config = SimpleNamespace(
         channels=ChannelsConfig(),
-        providers=SimpleNamespace(groq=SimpleNamespace(api_key="")),
+        litellm=SimpleNamespace(groq_api_key=""),
     )
 
     mgr = ChannelManager.__new__(ChannelManager)
@@ -807,7 +807,7 @@ async def test_stop_all_handles_channel_exception():
 
     fake_config = SimpleNamespace(
         channels=ChannelsConfig(),
-        providers=SimpleNamespace(groq=SimpleNamespace(api_key="")),
+        litellm=SimpleNamespace(groq_api_key=""),
     )
 
     mgr = ChannelManager.__new__(ChannelManager)
@@ -825,7 +825,7 @@ async def test_start_all_no_channels_logs_warning():
     """start_all should log warning when no channels are enabled."""
     fake_config = SimpleNamespace(
         channels=ChannelsConfig(),
-        providers=SimpleNamespace(groq=SimpleNamespace(api_key="")),
+        litellm=SimpleNamespace(groq_api_key=""),
     )
 
     mgr = ChannelManager.__new__(ChannelManager)
@@ -845,7 +845,7 @@ async def test_start_all_creates_dispatch_task():
     """start_all should create the dispatch task when channels exist."""
     fake_config = SimpleNamespace(
         channels=ChannelsConfig(),
-        providers=SimpleNamespace(groq=SimpleNamespace(api_key="")),
+        litellm=SimpleNamespace(groq_api_key=""),
     )
 
     mgr = ChannelManager.__new__(ChannelManager)

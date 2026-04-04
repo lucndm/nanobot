@@ -526,7 +526,9 @@ class AgentLoop:
                 message_thread_id=msg.metadata.get("message_thread_id"),
                 topic_name=msg.metadata.get("topic_name"),
             )
-            self._save_turn(session, all_msgs, 1 + len(history), message_id=msg.metadata.get("message_id"))
+            self._save_turn(
+                session, all_msgs, 1 + len(history), message_id=msg.metadata.get("message_id")
+            )
             self.sessions.save(session)
             self._schedule_background(
                 self.memory_consolidator.maybe_consolidate_by_tokens(session, topic_name=topic_name)
@@ -606,7 +608,9 @@ class AgentLoop:
         if final_content is None:
             final_content = "I've completed processing but have no response to give."
 
-        self._save_turn(session, all_msgs, 1 + len(history), message_id=msg.metadata.get("message_id"))
+        self._save_turn(
+            session, all_msgs, 1 + len(history), message_id=msg.metadata.get("message_id")
+        )
         self.sessions.save(session)
         self._schedule_background(
             self.memory_consolidator.maybe_consolidate_by_tokens(session, topic_name=topic_name)

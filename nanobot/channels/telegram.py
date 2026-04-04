@@ -821,7 +821,9 @@ class TelegramChannel(BaseChannel):
                 if body.get("ok") and body.get("result", {}).get("name"):
                     name = body["result"]["name"]
                     self._persist_topic_name(chat_id, thread_id, name)
-                    logger.debug("Resolved topic name via API: thread_id={} -> '{}'", thread_id, name)
+                    logger.debug(
+                        "Resolved topic name via API: thread_id={} -> '{}'", thread_id, name
+                    )
                     return name
                 else:
                     logger.debug(
