@@ -23,8 +23,8 @@ class _FakePlugin(BaseChannel):
     name = "fakeplugin"
     display_name = "Fake Plugin"
 
-    def __init__(self, config, bus):
-        super().__init__(config, bus)
+    def __init__(self, config, bus, **kwargs):
+        super().__init__(config, bus, **kwargs)
         self.login_calls: list[bool] = []
 
     async def start(self) -> None:

@@ -238,12 +238,8 @@ class TelegramChannel(BaseChannel):
         self._message_threads: dict[tuple[str, int], int] = {}
         self._topic_names: dict[int, str] = {}  # thread_id -> topic name
 
-        # Topic mapping persistence via shared memories.db
+        # Topic mapping persistence — set by ChannelManager via topic_store
         self._topic_store: MemoryStoreProtocol | None = None
-        if self.workspace:
-            from nanobot.agent.store_sqlite import SqliteMemoryStore
-
-            self._topic_store = SqliteMemoryStore(self.workspace)
 
         self._bot_user_id: int | None = None
         self._bot_username: str | None = None
@@ -265,6 +261,14 @@ class TelegramChannel(BaseChannel):
         else:
             self._send_duration = None
             self._send_errors = None
+
+    @property
+    def topic_store(self):
+        return self._topic_store
+
+    @topic_store.setter
+    def topic_store(self, store):
+        self._topic_store = store
 
     def is_allowed(self, sender_id: str) -> bool:
         """Preserve Telegram's legacy id|username allowlist matching."""

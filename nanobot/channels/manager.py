@@ -52,8 +52,16 @@ class ChannelManager:
             if not enabled:
                 continue
             try:
-                channel = cls(section, self.bus, workspace=self.config.workspace_path)
+                workspace = getattr(self.config, "workspace_path", None)
+                channel = cls(section, self.bus, workspace=workspace)
                 channel.transcription_api_key = groq_key
+                # Share the memory store with channels for topic mapping
+                if workspace is not None and not hasattr(self, "_memory_store"):
+                    from nanobot.agent.store import create_memory_store
+
+                    self._memory_store = create_memory_store(self.config, workspace)
+                if hasattr(self, "_memory_store"):
+                    channel.topic_store = self._memory_store
                 self.channels[name] = channel
                 logger.info("{} channel enabled", cls.display_name)
             except Exception as e:

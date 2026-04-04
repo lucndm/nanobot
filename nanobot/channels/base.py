@@ -24,6 +24,7 @@ class BaseChannel(ABC):
     name: str = "base"
     display_name: str = "Base"
     transcription_api_key: str = ""
+    topic_store: Any = None  # MemoryStoreProtocol, set by ChannelManager
 
     def __init__(self, config: Any, bus: MessageBus, workspace: Path | None = None):
         """
