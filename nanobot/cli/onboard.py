@@ -668,93 +668,95 @@ def _try_auto_fill_context_window(model: BaseModel, new_model_name: str) -> None
         console.print("[dim](i) Could not auto-fill context window (model not in database)[/dim]")
 
 
-# --- Provider Configuration ---
+# --- LiteLLM Configuration ---
 
 
-@lru_cache(maxsize=1)
-def _get_provider_info() -> dict[str, tuple[str, bool, bool, str]]:
-    """Get provider info from registry (cached)."""
-    from nanobot.providers.registry import PROVIDERS
+def _configure_litellm(config: Config) -> None:
+    """Configure LiteLLM proxy / direct mode for LLM access."""
 
-    return {
-        spec.name: (
-            spec.display_name or spec.name,
-            spec.is_gateway,
-            spec.is_local,
-            spec.default_api_base,
-        )
-        for spec in PROVIDERS
-        if not spec.is_oauth
-    }
-
-
-def _get_provider_names() -> dict[str, str]:
-    """Get provider display names."""
-    info = _get_provider_info()
-    return {name: data[0] for name, data in info.items() if name}
-
-
-def _configure_provider(config: Config, provider_name: str) -> None:
-    """Configure a single LLM provider."""
-    provider_config = getattr(config.providers, provider_name, None)
-    if provider_config is None:
-        console.print(f"[red]Unknown provider: {provider_name}[/red]")
-        return
-
-    display_name = _get_provider_names().get(provider_name, provider_name)
-    info = _get_provider_info()
-    default_api_base = info.get(provider_name, (None, None, None, None))[3]
-
-    if default_api_base and not provider_config.api_base:
-        provider_config.api_base = default_api_base
-
-    updated_provider = _configure_pydantic_model(
-        provider_config,
-        display_name,
+    console.clear()
+    _show_section_header(
+        "LiteLLM Configuration",
+        "Configure LLM access via LiteLLM proxy or direct router",
     )
-    if updated_provider is not None:
-        setattr(config.providers, provider_name, updated_provider)
 
+    current = config.litellm
 
-def _configure_providers(config: Config) -> None:
-    """Configure LLM providers."""
+    # 1. Mode selection
+    mode_choices = ["proxy", "direct"]
+    mode_display = [
+        f"Proxy (recommended) [current: {current.mode or 'auto'}]"
+        if current.mode == "proxy"
+        else "Proxy (recommended)",
+        f"Direct (in-process Router) [current: {current.mode}]"
+        if current.mode == "direct"
+        else "Direct (in-process Router)",
+    ]
+    mode_answer = _select_with_back("Select LiteLLM mode:", mode_display)
+    if mode_answer is _BACK_PRESSED or mode_answer is None:
+        return
+    selected_mode = "proxy" if "Proxy" in str(mode_answer) else "direct"
+    current.mode = selected_mode
 
-    def get_provider_choices() -> list[str]:
-        """Build provider choices with config status indicators."""
-        choices = []
-        for name, display in _get_provider_names().items():
-            provider = getattr(config.providers, name, None)
-            if provider and provider.api_key:
-                choices.append(f"{display} *")
-            else:
-                choices.append(display)
-        return choices + ["<- Back"]
+    # 2. Configure based on mode
+    if selected_mode == "proxy":
+        # Proxy URL
+        default_url = current.api_base or ""
+        url = _get_questionary().text(
+            "LiteLLM Proxy URL (e.g. http://localhost:4000):",
+            default=default_url,
+        ).ask()
+        if url is None:
+            return
+        current.api_base = url if url.strip() else None
 
-    while True:
-        try:
-            console.clear()
-            _show_section_header(
-                "LLM Providers", "Select a provider to configure API key and endpoint"
-            )
-            choices = get_provider_choices()
-            answer = _select_with_back("Select provider:", choices)
+        # API key (optional, supports ${ENV_VAR} syntax)
+        default_key = current.api_key or ""
+        key = _get_questionary().text(
+            "API Key (optional, supports ${ENV_VAR} syntax):",
+            default=default_key,
+        ).ask()
+        if key is None:
+            return
+        current.api_key = key if key.strip() else None
+    else:
+        # Direct mode: configure model entries
+        console.print("[dim]Configure model entries for the in-process LiteLLM Router.[/dim]")
+        console.print("[dim]Each entry maps a model name to litellm_params (api_base, api_key, etc.).[/dim]")
+        console.print()
 
-            if answer is _BACK_PRESSED or answer is None or answer == "<- Back":
+        add_another = True
+        while add_another:
+            model_name = _get_questionary().text(
+                "Model name (e.g. gpt-4o, anthropic/claude-sonnet):",
+                default="",
+            ).ask()
+            if model_name is None or not model_name.strip():
                 break
 
-            # Type guard: answer is now guaranteed to be a string
-            assert isinstance(answer, str)
-            # Extract provider name from choice (remove " *" suffix if present)
-            provider_name = answer.replace(" *", "")
-            # Find the actual provider key from display names
-            for name, display in _get_provider_names().items():
-                if display == provider_name:
-                    _configure_provider(config, name)
-                    break
+            params_json = _get_questionary().text(
+                "litellm_params JSON (e.g. {\"api_key\": \"${OPENAI_API_KEY}\"}):",
+                default="{}",
+            ).ask()
+            if params_json is None:
+                break
 
-        except KeyboardInterrupt:
-            console.print("\n[dim]Returning to main menu...[/dim]")
-            break
+            try:
+                params = json.loads(params_json)
+            except json.JSONDecodeError:
+                console.print("[yellow]! Invalid JSON, skipping this model[/yellow]")
+                continue
+
+            from nanobot.config.schema import LiteLLMModelConfig
+
+            current.models.append(LiteLLMModelConfig(model_name=model_name.strip(), litellm_params=params))
+            console.print(f"[green]+ Added model: {model_name.strip()}[/green]")
+
+            add_another = (
+                _get_questionary().confirm("Add another model?", default=False).ask() or False
+            )
+
+    config.litellm = current
 
 
 # --- Channel Configuration ---
@@ -920,17 +922,21 @@ def _show_summary(config: Config) -> None:
     """Display configuration summary using rich."""
     console.print()
 
-    # Providers
-    provider_rows = []
-    for name, display in _get_provider_names().items():
-        provider = getattr(config.providers, name, None)
-        status = (
-            "[green]configured[/green]"
-            if (provider and provider.api_key)
-            else "[dim]not configured[/dim]"
-        )
-        provider_rows.append((display, status))
-    _print_summary_panel(provider_rows, "LLM Providers")
+    # LiteLLM
+    litellm_rows = []
+    llm = config.litellm
+    mode_str = llm.mode or "auto"
+    litellm_rows.append(("Mode", mode_str))
+    if llm.api_base:
+        litellm_rows.append(("Proxy URL", llm.api_base))
+    if llm.api_key:
+        litellm_rows.append(("API Key", _mask_value(llm.api_key)))
+    if llm.models:
+        for i, m in enumerate(llm.models):
+            litellm_rows.append((f"Model {i + 1}", m.model_name))
+    if not llm.api_base and not llm.models:
+        litellm_rows.append(("Status", "[dim]not configured[/dim]"))
+    _print_summary_panel(litellm_rows, "LiteLLM")
 
     # Channels
     channel_rows = []
@@ -1024,7 +1030,7 @@ def run_onboard(initial_config: Config | None = None) -> OnboardResult:
                 .select(
                     "What would you like to configure?",
                     choices=[
-                        "[P] LLM Provider",
+                        "[L] LiteLLM Configuration",
                         "[C] Chat Channel",
                         "[A] Agent Settings",
                         "[G] Gateway",
@@ -1049,7 +1055,7 @@ def run_onboard(initial_config: Config | None = None) -> OnboardResult:
             continue
 
         _MENU_DISPATCH = {  # noqa: N806
-            "[P] LLM Provider": lambda: _configure_providers(config),
+            "[L] LiteLLM Configuration": lambda: _configure_litellm(config),
             "[C] Chat Channel": lambda: _configure_channels(config),
             "[A] Agent Settings": lambda: _configure_general_settings(config, "Agent Settings"),
             "[G] Gateway": lambda: _configure_general_settings(config, "Gateway"),
