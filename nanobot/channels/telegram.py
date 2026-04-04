@@ -13,7 +13,14 @@ from loguru import logger
 from pydantic import Field
 from telegram import BotCommand, ReactionTypeEmoji, ReplyParameters, Update
 from telegram.error import BadRequest, TimedOut
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, MessageReactionHandler, filters
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    MessageReactionHandler,
+    filters,
+)
 from telegram.request import HTTPXRequest
 
 from nanobot.bus.events import OutboundMessage
@@ -1232,13 +1239,20 @@ class TelegramChannel(BaseChannel):
             if sentiment:
                 logger.debug(
                     "REACTION_REMOVE: chat_id={} topic={} msg_id={} emoji={} sentiment={}",
-                    str_chat_id, topic, message_id, emoji, sentiment,
+                    str_chat_id,
+                    topic,
+                    message_id,
+                    emoji,
+                    sentiment,
                 )
                 # Memory store wiring deferred to Task 4
             else:
                 logger.debug(
                     "REACTION_REMOVE_UNKNOWN: chat_id={} topic={} msg_id={} emoji={}",
-                    str_chat_id, topic, message_id, emoji,
+                    str_chat_id,
+                    topic,
+                    message_id,
+                    emoji,
                 )
 
         # Process new reactions
@@ -1250,13 +1264,18 @@ class TelegramChannel(BaseChannel):
             if sentiment:
                 logger.debug(
                     "REACTION: chat_id={} topic={} msg_id={} emoji={} -> {}",
-                    str_chat_id, topic, message_id, emoji, sentiment,
+                    str_chat_id,
+                    topic,
+                    message_id,
+                    emoji,
+                    sentiment,
                 )
                 # Memory store wiring deferred to Task 4
             else:
                 logger.debug(
                     "REACTION_UNKNOWN: emoji={} asking user in chat_id={}",
-                    emoji, str_chat_id,
+                    emoji,
+                    str_chat_id,
                 )
                 # Ask user to classify unknown emoji (one-time reply)
                 if self._app:

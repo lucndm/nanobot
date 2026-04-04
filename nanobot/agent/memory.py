@@ -111,14 +111,18 @@ class SqliteMemoryStore:
                 emoji TEXT NOT NULL, sentiment TEXT NOT NULL DEFAULT 'neutral',
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 UNIQUE(chat_id, message_id, emoji))""")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_reactions_chat ON message_reactions(chat_id)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_reactions_chat ON message_reactions(chat_id)"
+            )
             conn.execute("""CREATE TABLE IF NOT EXISTS message_sentiment (
                 chat_id TEXT NOT NULL, message_id INTEGER NOT NULL, topic TEXT NOT NULL,
                 positive_count INTEGER DEFAULT 0, negative_count INTEGER DEFAULT 0,
                 neutral_count INTEGER DEFAULT 0,
                 updated_at TEXT NOT NULL DEFAULT (datetime('now')),
                 PRIMARY KEY (chat_id, message_id))""")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_sentiment_topic ON message_sentiment(topic)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sentiment_topic ON message_sentiment(topic)"
+            )
             conn.execute("""CREATE TABLE IF NOT EXISTS emoji_sentiment (
                 emoji TEXT PRIMARY KEY,
                 sentiment TEXT NOT NULL CHECK(sentiment IN ('positive', 'negative', 'neutral')),
@@ -241,7 +245,9 @@ class SqliteMemoryStore:
     def load_all_topic_mappings(self) -> dict[tuple[int, int], str]:
         """Load all topic mappings. Returns {(chat_id, thread_id): topic_name}."""
         with self._conn() as conn:
-            rows = conn.execute("SELECT chat_id, thread_id, topic_name FROM topic_mapping").fetchall()
+            rows = conn.execute(
+                "SELECT chat_id, thread_id, topic_name FROM topic_mapping"
+            ).fetchall()
         return {(r[0], r[1]): r[2] for r in rows}
 
     # ── Reactions ──────────────────────────────────────────────────
@@ -279,8 +285,7 @@ class SqliteMemoryStore:
                 return
             sentiment = row[0]
             conn.execute(
-                "DELETE FROM message_reactions "
-                "WHERE chat_id = ? AND message_id = ? AND emoji = ?",
+                "DELETE FROM message_reactions WHERE chat_id = ? AND message_id = ? AND emoji = ?",
                 (chat_id, message_id, emoji),
             )
             count_col = f"{sentiment}_count"
@@ -309,8 +314,7 @@ class SqliteMemoryStore:
     def get_high_value_messages(self, topic: str) -> list[int]:
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT message_id FROM message_sentiment "
-                "WHERE topic = ? AND positive_count >= 1",
+                "SELECT message_id FROM message_sentiment WHERE topic = ? AND positive_count >= 1",
                 (topic,),
             ).fetchall()
         return [r[0] for r in rows]
@@ -330,9 +334,7 @@ class SqliteMemoryStore:
         if emoji in _POSITIVE_EMOJI or emoji in _NEGATIVE_EMOJI:
             return True
         with self._conn() as conn:
-            row = conn.execute(
-                "SELECT 1 FROM emoji_sentiment WHERE emoji = ?", (emoji,)
-            ).fetchone()
+            row = conn.execute("SELECT 1 FROM emoji_sentiment WHERE emoji = ?", (emoji,)).fetchone()
         return row is not None
 
     def learn_emoji(self, emoji: str, sentiment: str) -> None:
@@ -345,8 +347,7 @@ class SqliteMemoryStore:
     def cleanup_old_reactions(self, max_age_days: int = 30) -> int:
         with self._conn() as conn:
             cursor = conn.execute(
-                "DELETE FROM message_reactions "
-                "WHERE created_at < datetime('now', ?)",
+                "DELETE FROM message_reactions WHERE created_at < datetime('now', ?)",
                 (f"-{max_age_days} days",),
             )
             return cursor.rowcount
@@ -391,7 +392,12 @@ class SqliteMemoryStore:
 
         high_value_ids = set(self.get_high_value_messages(topic)) if topic else set()
         high_count = sum(1 for m in messages if m.get("telegram_message_id") in high_value_ids)
-        logger.debug("CONSOLIDATION: topic={} high_value={} total={} messages", topic, high_count, len(messages))
+        logger.debug(
+            "CONSOLIDATION: topic={} high_value={} total={} messages",
+            topic,
+            high_count,
+            len(messages),
+        )
 
         current = self.read_topic_memory(topic) if topic else self.read_long_term()
         formatted = self.format_messages_for_consolidation(messages, topic)
