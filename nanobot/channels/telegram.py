@@ -228,6 +228,14 @@ class TelegramChannel(BaseChannel):
         self._media_group_tasks: dict[str, asyncio.Task] = {}
         self._message_threads: dict[tuple[str, int], int] = {}
         self._topic_names: dict[int, str] = {}  # thread_id -> topic name
+
+        # Topic mapping persistence via shared memories.db
+        self._topic_store: SqliteMemoryStore | None = None
+        if self.workspace:
+            from nanobot.agent.memory import SqliteMemoryStore
+
+            self._topic_store = SqliteMemoryStore(self.workspace)
+
         self._bot_user_id: int | None = None
         self._bot_username: str | None = None
         self._stream_bufs: dict[str, _StreamBuf] = {}  # chat_id -> streaming state
@@ -743,33 +751,40 @@ class TelegramChannel(BaseChannel):
         }
 
     def _resolve_topic_name(self, message) -> str | None:
-        """Resolve topic name from cache or message. Returns name or None."""
+        """Resolve topic name from cache, DB, or forum_topic_created event.
+
+        Resolve order:
+        1. In-memory cache (_topic_names)
+        2. DB lookup (topic_mapping table)
+        3. forum_topic_created event in current message
+        4. Return None
+        """
         thread_id = getattr(message, "message_thread_id", None)
         if not thread_id or message.chat.type == "private":
             return None
+
+        chat_id = message.chat_id
+
+        # 1. In-memory cache
         if thread_id in self._topic_names:
             return self._topic_names[thread_id]
-        # Try forum_topic_created event
+
+        # 2. DB lookup
+        if self._topic_store:
+            name = self._topic_store.get_topic_mapping(chat_id, thread_id)
+            if name:
+                self._topic_names[thread_id] = name
+                return name
+
+        # 3. forum_topic_created event
         forum_topic = getattr(message, "forum_topic_created", None)
         if forum_topic and getattr(forum_topic, "name", ""):
-            self._topic_names[thread_id] = forum_topic.name
-            return forum_topic.name
-        return None
+            name = forum_topic.name
+            self._topic_names[thread_id] = name
+            if self._topic_store:
+                self._topic_store.set_topic_mapping(chat_id, thread_id, name)
+            return name
 
-    async def _fetch_topic_name(self, chat_id: int, thread_id: int) -> str | None:
-        """Resolve topic name via Telegram API and cache it."""
-        if thread_id in self._topic_names:
-            return self._topic_names[thread_id]
-        try:
-            bot = self._app.bot if self._app else None
-            if not bot:
-                return None
-            topic_info = await bot.get_forum_topic(chat_id=chat_id, message_thread_id=thread_id)
-            if topic_info and hasattr(topic_info, "name"):
-                self._topic_names[thread_id] = topic_info.name
-                return topic_info.name
-        except Exception:
-            pass
         return None
 
     @staticmethod
@@ -922,11 +937,6 @@ class TelegramChannel(BaseChannel):
         topic_name = self._resolve_topic_name(message)
         if topic_name:
             meta["topic_name"] = topic_name
-        elif meta.get("message_thread_id"):
-            # Try async API fetch for uncached topics
-            fetched = await self._fetch_topic_name(message.chat_id, meta["message_thread_id"])
-            if fetched:
-                meta["topic_name"] = fetched
 
         await self._handle_message(
             sender_id=self._sender_id(user),
@@ -1001,10 +1011,6 @@ class TelegramChannel(BaseChannel):
         topic_name = self._resolve_topic_name(message)
         if topic_name:
             metadata["topic_name"] = topic_name
-        elif metadata.get("message_thread_id"):
-            fetched = await self._fetch_topic_name(message.chat_id, metadata["message_thread_id"])
-            if fetched:
-                metadata["topic_name"] = fetched
         session_key = self._derive_topic_session_key(message)
 
         # Telegram media groups: buffer briefly, forward as one aggregated turn.
