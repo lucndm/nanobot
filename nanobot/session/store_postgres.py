@@ -115,15 +115,16 @@ class PostgresSessionStore:
             # Replace all messages for this session
             conn.execute("DELETE FROM session_messages WHERE session_key = %s", (key,))
             if messages:
-                # Use executemany for batch insert
+                # Strip null bytes from JSON — PostgreSQL JSONB rejects \u0000
+                rows = [
+                    (key, i, json.dumps(msg, ensure_ascii=False).replace("\u0000", ""))
+                    for i, msg in enumerate(messages)
+                ]
                 with conn.cursor() as cur:
                     cur.executemany(
                         "INSERT INTO session_messages (session_key, seq, message) "
                         "VALUES (%s, %s, %s)",
-                        [
-                            (key, i, json.dumps(msg, ensure_ascii=False))
-                            for i, msg in enumerate(messages)
-                        ],
+                        rows,
                     )
 
     def invalidate(self, key: str) -> None:
