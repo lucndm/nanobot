@@ -340,6 +340,11 @@ class TelegramChannel(BaseChannel):
 
         # Initialize and start polling
         await self._app.initialize()
+
+        # Preload persisted topic mappings and migrate from TOPIC.md files
+        self._preload_topic_mappings()
+        self._migrate_topic_id_from_files()
+
         await self._app.start()
 
         # Get bot info and register command menu
@@ -786,6 +791,57 @@ class TelegramChannel(BaseChannel):
             return name
 
         return None
+
+    def _preload_topic_mappings(self) -> None:
+        """Load persisted topic mappings from DB into in-memory cache."""
+        if not self._topic_store:
+            return
+        mappings = self._topic_store.load_all_topic_mappings()
+        for (chat_id, thread_id), name in mappings.items():
+            self._topic_names[thread_id] = name
+        if mappings:
+            logger.info("Preloaded {} topic mappings from DB", len(mappings))
+
+    def _migrate_topic_id_from_files(self) -> None:
+        """Scan topics/*/TOPIC.md for topic_id fields and persist to DB.
+
+        This is a one-time bootstrap for existing topics that have topic_id
+        in their TOPIC.md but no mapping in the database yet.
+        """
+        if not self.workspace or not self._topic_store:
+            return
+
+        topics_dir = self.workspace / "topics"
+        if not topics_dir.is_dir():
+            return
+
+        pattern = re.compile(r"- topic_id:\s*(\d+)")
+        migrated = 0
+        for topic_dir in topics_dir.iterdir():
+            if not topic_dir.is_dir():
+                continue
+            topic_file = topic_dir / "TOPIC.md"
+            if not topic_file.is_file():
+                continue
+            content = topic_file.read_text(encoding="utf-8")
+            m = pattern.search(content)
+            if not m:
+                continue
+            thread_id = int(m.group(1))
+            # Check all existing mappings for this thread_id
+            all_mappings = self._topic_store.load_all_topic_mappings()
+            already_mapped = any(tid == thread_id for (_, tid) in all_mappings)
+            if already_mapped:
+                continue
+            # Use directory name as topic name (already normalized)
+            topic_name = topic_dir.name.replace("-", " ").title()
+            # Use chat_id=0 as placeholder — will be updated on first message
+            self._topic_store.set_topic_mapping(0, thread_id, topic_name)
+            self._topic_names[thread_id] = topic_name
+            migrated += 1
+
+        if migrated:
+            logger.info("Migrated {} topic_id mappings from TOPIC.md files", migrated)
 
     @staticmethod
     def _extract_reply_context(message) -> str | None:
