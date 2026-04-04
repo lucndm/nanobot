@@ -38,7 +38,7 @@ class ChannelManager:
         """Initialize channels discovered via pkgutil scan + entry_points plugins."""
         from nanobot.channels.registry import discover_all
 
-        groq_key = self.config.providers.groq.api_key
+        groq_key = self.config.litellm.groq_api_key
 
         for name, cls in discover_all().items():
             section = getattr(self.config.channels, name, None)
