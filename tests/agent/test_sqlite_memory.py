@@ -165,3 +165,48 @@ class TestSqliteMemoryStoreConsolidation:
         )
         await store.consolidate_topic("558", [{"role": "user", "content": "x", "timestamp": "t"}], provider, "m")
         assert store.read_topic_memory("677") == "Dev data"
+
+
+class TestTopicMapping:
+    def test_get_mapping_returns_none_when_missing(self, tmp_path: Path):
+        store = SqliteMemoryStore(tmp_path)
+        assert store.get_topic_mapping(-1003738155502, 4) is None
+
+    def test_set_and_get_mapping(self, tmp_path: Path):
+        store = SqliteMemoryStore(tmp_path)
+        store.set_topic_mapping(-1003738155502, 4, "Finance")
+        assert store.get_topic_mapping(-1003738155502, 4) == "Finance"
+
+    def test_set_mapping_overwrites(self, tmp_path: Path):
+        store = SqliteMemoryStore(tmp_path)
+        store.set_topic_mapping(-1003738155502, 4, "Finance")
+        store.set_topic_mapping(-1003738155502, 4, "Finance Tracker")
+        assert store.get_topic_mapping(-1003738155502, 4) == "Finance Tracker"
+
+    def test_delete_mapping(self, tmp_path: Path):
+        store = SqliteMemoryStore(tmp_path)
+        store.set_topic_mapping(-1003738155502, 4, "Finance")
+        store.delete_topic_mapping(-1003738155502, 4)
+        assert store.get_topic_mapping(-1003738155502, 4) is None
+
+    def test_delete_nonexistent_is_noop(self, tmp_path: Path):
+        store = SqliteMemoryStore(tmp_path)
+        store.delete_topic_mapping(-1003738155502, 999)  # should not raise
+
+    def test_load_all_mappings(self, tmp_path: Path):
+        store = SqliteMemoryStore(tmp_path)
+        store.set_topic_mapping(-1003738155502, 4, "Finance")
+        store.set_topic_mapping(-1003738155502, 6, "General")
+        store.set_topic_mapping(-1003738155502, 558, "Skills")
+        mappings = store.load_all_topic_mappings()
+        assert mappings[(-1003738155502, 4)] == "Finance"
+        assert mappings[(-1003738155502, 6)] == "General"
+        assert mappings[(-1003738155502, 558)] == "Skills"
+        assert len(mappings) == 3
+
+    def test_different_chats_same_thread_id(self, tmp_path: Path):
+        store = SqliteMemoryStore(tmp_path)
+        store.set_topic_mapping(-1003738155502, 4, "Finance")
+        store.set_topic_mapping(-9999999999, 4, "Other Chat Topic")
+        assert store.get_topic_mapping(-1003738155502, 4) == "Finance"
+        assert store.get_topic_mapping(-9999999999, 4) == "Other Chat Topic"

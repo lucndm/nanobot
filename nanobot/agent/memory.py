@@ -123,6 +123,12 @@ class SqliteMemoryStore:
                 emoji TEXT PRIMARY KEY,
                 sentiment TEXT NOT NULL CHECK(sentiment IN ('positive', 'negative', 'neutral')),
                 learned_at TEXT NOT NULL DEFAULT (datetime('now')))""")
+            conn.execute("""CREATE TABLE IF NOT EXISTS topic_mapping (
+                chat_id INTEGER NOT NULL,
+                thread_id INTEGER NOT NULL,
+                topic_name TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (chat_id, thread_id))""")
 
     def read_long_term(self) -> str:
         with self._conn() as conn:
@@ -201,6 +207,42 @@ class SqliteMemoryStore:
         with self._conn() as conn:
             rows = conn.execute("SELECT topic FROM topic_memory ORDER BY topic").fetchall()
         return [r[0] for r in rows]
+
+    # ── Topic Mapping ────────────────────────────────────────────────
+
+    def get_topic_mapping(self, chat_id: int, thread_id: int) -> str | None:
+        """Get topic name for a (chat_id, thread_id) pair."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT topic_name FROM topic_mapping WHERE chat_id = ? AND thread_id = ?",
+                (chat_id, thread_id),
+            ).fetchone()
+        return row[0] if row else None
+
+    def set_topic_mapping(self, chat_id: int, thread_id: int, topic_name: str) -> None:
+        """Insert or update topic name mapping."""
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO topic_mapping (chat_id, thread_id, topic_name, updated_at) "
+                "VALUES (?, ?, ?, datetime('now')) "
+                "ON CONFLICT(chat_id, thread_id) DO UPDATE "
+                "SET topic_name=excluded.topic_name, updated_at=excluded.updated_at",
+                (chat_id, thread_id, topic_name),
+            )
+
+    def delete_topic_mapping(self, chat_id: int, thread_id: int) -> None:
+        """Remove a topic mapping."""
+        with self._conn() as conn:
+            conn.execute(
+                "DELETE FROM topic_mapping WHERE chat_id = ? AND thread_id = ?",
+                (chat_id, thread_id),
+            )
+
+    def load_all_topic_mappings(self) -> dict[tuple[int, int], str]:
+        """Load all topic mappings. Returns {(chat_id, thread_id): topic_name}."""
+        with self._conn() as conn:
+            rows = conn.execute("SELECT chat_id, thread_id, topic_name FROM topic_mapping").fetchall()
+        return {(r[0], r[1]): r[2] for r in rows}
 
     # ── Reactions ──────────────────────────────────────────────────
 
