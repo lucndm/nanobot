@@ -768,14 +768,15 @@ class TelegramChannel(BaseChannel):
             "reply_to_message_id": getattr(reply_to, "message_id", None) if reply_to else None,
         }
 
-    def _resolve_topic_name(self, message) -> str | None:
-        """Resolve topic name from cache, DB, or forum_topic_created event.
+    async def _resolve_topic_name(self, message) -> str | None:
+        """Resolve topic name from cache, DB, API, or forum_topic_created event.
 
         Resolve order:
         1. In-memory cache (_topic_names)
         2. DB lookup (topic_mapping table)
-        3. forum_topic_created event in current message
-        4. Return None
+        3. Telegram API get_forum_topic_info
+        4. forum_topic_created event in current message
+        5. Return None
         """
         thread_id = getattr(message, "message_thread_id", None)
         if not thread_id or message.chat.type == "private":
@@ -804,7 +805,18 @@ class TelegramChannel(BaseChannel):
                 self._topic_store.delete_topic_mapping(0, thread_id)
                 return name
 
-        # 3. forum_topic_created event
+        # 3. Telegram API: fetch topic info for unmapped topics
+        if self._app and thread_id > 1:  # thread_id=1 is General topic
+            try:
+                topic_info = await self._app.bot.get_forum_topic_info(chat_id, thread_id)
+                if topic_info and getattr(topic_info, "name", ""):
+                    name = topic_info.name
+                    self._persist_topic_name(chat_id, thread_id, name)
+                    return name
+            except Exception as e:
+                logger.debug("Could not fetch topic info for thread {}: {}", thread_id, e)
+
+        # 4. forum_topic_created event
         forum_topic = getattr(message, "forum_topic_created", None)
         if forum_topic and getattr(forum_topic, "name", ""):
             self._persist_topic_name(chat_id, thread_id, forum_topic.name)
@@ -1017,7 +1029,7 @@ class TelegramChannel(BaseChannel):
         user = update.effective_user
         self._remember_thread_context(message)
         meta = self._build_message_metadata(message, user)
-        topic_name = self._resolve_topic_name(message)
+        topic_name = await self._resolve_topic_name(message)
         if topic_name:
             meta["topic_name"] = topic_name
 
@@ -1091,7 +1103,7 @@ class TelegramChannel(BaseChannel):
             message.chat.type != "private",
         )
         metadata = self._build_message_metadata(message, user)
-        topic_name = self._resolve_topic_name(message)
+        topic_name = await self._resolve_topic_name(message)
         if topic_name:
             metadata["topic_name"] = topic_name
         session_key = self._derive_topic_session_key(message)

@@ -1020,45 +1020,45 @@ class TestTopicResolution:
         )
         return msg
 
-    def test_resolve_from_cache(self, tmp_path):
+    async def test_resolve_from_cache(self, tmp_path):
         ch = self._make_channel(tmp_path)
         ch._topic_names[4] = "Finance"
         msg = self._make_message(thread_id=4)
-        assert ch._resolve_topic_name(msg) == "Finance"
+        assert await ch._resolve_topic_name(msg) == "Finance"
 
-    def test_resolve_from_db_when_not_in_cache(self, tmp_path):
+    async def test_resolve_from_db_when_not_in_cache(self, tmp_path):
         ch = self._make_channel(tmp_path)
         # Persist to DB directly
         ch._topic_store.set_topic_mapping(-1003738155502, 6, "General")
         msg = self._make_message(thread_id=6)
-        assert ch._resolve_topic_name(msg) == "General"
+        assert await ch._resolve_topic_name(msg) == "General"
         # Now also in cache
         assert ch._topic_names[6] == "General"
 
-    def test_resolve_from_forum_topic_created_event(self, tmp_path):
+    async def test_resolve_from_forum_topic_created_event(self, tmp_path):
         ch = self._make_channel(tmp_path)
         msg = self._make_message(thread_id=558, topic_name="Skills Map")
-        assert ch._resolve_topic_name(msg) == "Skills Map"
+        assert await ch._resolve_topic_name(msg) == "Skills Map"
         # Persisted to DB
         assert ch._topic_store.get_topic_mapping(-1003738155502, 558) == "Skills Map"
 
-    def test_resolve_returns_none_for_private_chat(self, tmp_path):
+    async def test_resolve_returns_none_for_private_chat(self, tmp_path):
         ch = self._make_channel(tmp_path)
         msg = SimpleNamespace(
             chat_id=12345,
             chat=SimpleNamespace(type="private"),
             message_thread_id=None,
         )
-        assert ch._resolve_topic_name(msg) is None
+        assert await ch._resolve_topic_name(msg) is None
 
-    def test_resolve_returns_none_when_no_thread_id(self, tmp_path):
+    async def test_resolve_returns_none_when_no_thread_id(self, tmp_path):
         ch = self._make_channel(tmp_path)
         msg = SimpleNamespace(
             chat_id=-1003738155502,
             chat=SimpleNamespace(type="supergroup"),
             message_thread_id=None,
         )
-        assert ch._resolve_topic_name(msg) is None
+        assert await ch._resolve_topic_name(msg) is None
 
     def test_preload_on_startup(self, tmp_path):
         # Setup: persist mappings in DB
@@ -1075,13 +1075,13 @@ class TestTopicResolution:
         assert ch2._topic_names[4] == "Finance"
         assert ch2._topic_names[6] == "General"
 
-    def test_placeholder_chat_id_updated_on_resolve(self, tmp_path):
+    async def test_placeholder_chat_id_updated_on_resolve(self, tmp_path):
         ch = self._make_channel(tmp_path)
         # Create a placeholder mapping with chat_id=0
         ch._topic_store.set_topic_mapping(0, 99, "Ideas")
         # Resolve with real chat_id should update the placeholder
         msg = self._make_message(thread_id=99, chat_id=-1003738155502)
-        assert ch._resolve_topic_name(msg) == "Ideas"
+        assert await ch._resolve_topic_name(msg) == "Ideas"
         # Verify the mapping now has the real chat_id
         assert ch._topic_store.get_topic_mapping(-1003738155502, 99) == "Ideas"
         # Placeholder should be gone
