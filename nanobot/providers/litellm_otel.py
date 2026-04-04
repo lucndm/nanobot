@@ -69,7 +69,9 @@ class OTelCallback:
 
         try:
             if self._prompt_tokens:
-                self._prompt_tokens.add(prompt_tokens, attributes={"model": model, "type": "prompt"})
+                self._prompt_tokens.add(
+                    prompt_tokens, attributes={"model": model, "type": "prompt"}
+                )
         except Exception:
             logger.debug("OTelCallback: failed to record prompt tokens")
 
@@ -89,8 +91,6 @@ class OTelCallback:
 
         try:
             if self._errors:
-                self._errors.add(
-                    1, attributes={"model": model, "error_type": error_type}
-                )
+                self._errors.add(1, attributes={"model": model, "error_type": error_type})
         except Exception:
             logger.debug("OTelCallback: failed to record error")

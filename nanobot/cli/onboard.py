@@ -683,7 +683,6 @@ def _configure_litellm(config: Config) -> None:
     current = config.litellm
 
     # 1. Mode selection
-    mode_choices = ["proxy", "direct"]
     mode_display = [
         f"Proxy (recommended) [current: {current.mode or 'auto'}]"
         if current.mode == "proxy"
@@ -702,42 +701,60 @@ def _configure_litellm(config: Config) -> None:
     if selected_mode == "proxy":
         # Proxy URL
         default_url = current.api_base or ""
-        url = _get_questionary().text(
-            "LiteLLM Proxy URL (e.g. http://localhost:4000):",
-            default=default_url,
-        ).ask()
+        url = (
+            _get_questionary()
+            .text(
+                "LiteLLM Proxy URL (e.g. http://localhost:4000):",
+                default=default_url,
+            )
+            .ask()
+        )
         if url is None:
             return
         current.api_base = url if url.strip() else None
 
         # API key (optional, supports ${ENV_VAR} syntax)
         default_key = current.api_key or ""
-        key = _get_questionary().text(
-            "API Key (optional, supports ${ENV_VAR} syntax):",
-            default=default_key,
-        ).ask()
+        key = (
+            _get_questionary()
+            .text(
+                "API Key (optional, supports ${ENV_VAR} syntax):",
+                default=default_key,
+            )
+            .ask()
+        )
         if key is None:
             return
         current.api_key = key if key.strip() else None
     else:
         # Direct mode: configure model entries
         console.print("[dim]Configure model entries for the in-process LiteLLM Router.[/dim]")
-        console.print("[dim]Each entry maps a model name to litellm_params (api_base, api_key, etc.).[/dim]")
+        console.print(
+            "[dim]Each entry maps a model name to litellm_params (api_base, api_key, etc.).[/dim]"
+        )
         console.print()
 
         add_another = True
         while add_another:
-            model_name = _get_questionary().text(
-                "Model name (e.g. gpt-4o, anthropic/claude-sonnet):",
-                default="",
-            ).ask()
+            model_name = (
+                _get_questionary()
+                .text(
+                    "Model name (e.g. gpt-4o, anthropic/claude-sonnet):",
+                    default="",
+                )
+                .ask()
+            )
             if model_name is None or not model_name.strip():
                 break
 
-            params_json = _get_questionary().text(
-                "litellm_params JSON (e.g. {\"api_key\": \"${OPENAI_API_KEY}\"}):",
-                default="{}",
-            ).ask()
+            params_json = (
+                _get_questionary()
+                .text(
+                    'litellm_params JSON (e.g. {"api_key": "${OPENAI_API_KEY}"}):',
+                    default="{}",
+                )
+                .ask()
+            )
             if params_json is None:
                 break
 
@@ -749,7 +766,9 @@ def _configure_litellm(config: Config) -> None:
 
             from nanobot.config.schema import LiteLLMModelConfig
 
-            current.models.append(LiteLLMModelConfig(model_name=model_name.strip(), litellm_params=params))
+            current.models.append(
+                LiteLLMModelConfig(model_name=model_name.strip(), litellm_params=params)
+            )
             console.print(f"[green]+ Added model: {model_name.strip()}[/green]")
 
             add_another = (

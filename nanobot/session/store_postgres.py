@@ -121,7 +121,13 @@ class PostgresSessionStore:
                 "ON CONFLICT(key) DO UPDATE SET "
                 "updated_at=excluded.updated_at, metadata=excluded.metadata, "
                 "last_consolidated=excluded.last_consolidated",
-                (key, created_at, now, json.dumps(self._sanitize_for_pg(metadata)), last_consolidated),
+                (
+                    key,
+                    created_at,
+                    now,
+                    json.dumps(self._sanitize_for_pg(metadata)),
+                    last_consolidated,
+                ),
             )
             # Replace all messages for this session
             conn.execute("DELETE FROM session_messages WHERE session_key = %s", (key,))

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -82,7 +81,6 @@ class AgentRunner:
             if spec.reasoning_effort is not None:
                 kwargs["reasoning_effort"] = spec.reasoning_effort
 
-            start = time.monotonic()
             try:
                 if hook.wants_streaming():
 
@@ -95,11 +93,10 @@ class AgentRunner:
                     )
                 else:
                     response = await self.provider.chat_with_retry(**kwargs)
-            except Exception as exc:
-                duration_ms = (time.monotonic() - start) * 1000
+            except Exception:
                 raise
             else:
-                duration_ms = (time.monotonic() - start) * 1000
+                pass
 
             raw_usage = response.usage or {}
             usage = {

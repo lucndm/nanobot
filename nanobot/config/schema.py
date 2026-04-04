@@ -188,7 +188,11 @@ class LiteLLMConfig(Base):
             self.api_key = os.environ.get(env_var, "")
 
         # Resolve ${ENV_VAR} in groq_api_key
-        if self.groq_api_key and self.groq_api_key.startswith("${") and self.groq_api_key.endswith("}"):
+        if (
+            self.groq_api_key
+            and self.groq_api_key.startswith("${")
+            and self.groq_api_key.endswith("}")
+        ):
             env_var = self.groq_api_key[2:-1]
             self.groq_api_key = os.environ.get(env_var, "")
 
