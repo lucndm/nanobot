@@ -31,6 +31,7 @@ from nanobot.config.schema import Base
 from nanobot.observability.otel import get_meter
 from nanobot.security.network import validate_url_target
 from nanobot.utils.helpers import split_message
+from nanobot.agent.store import MemoryStoreProtocol
 
 TELEGRAM_MAX_MESSAGE_LEN = 4000  # Telegram message character limit
 TELEGRAM_REPLY_CONTEXT_MAX_LEN = (
@@ -237,9 +238,9 @@ class TelegramChannel(BaseChannel):
         self._topic_names: dict[int, str] = {}  # thread_id -> topic name
 
         # Topic mapping persistence via shared memories.db
-        self._topic_store: SqliteMemoryStore | None = None
+        self._topic_store: MemoryStoreProtocol | None = None
         if self.workspace:
-            from nanobot.agent.memory import SqliteMemoryStore
+            from nanobot.agent.store_sqlite import SqliteMemoryStore
 
             self._topic_store = SqliteMemoryStore(self.workspace)
 

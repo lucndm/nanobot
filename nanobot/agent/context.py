@@ -9,6 +9,7 @@ from typing import Any
 from loguru import logger
 
 from nanobot.agent.memory import SqliteMemoryStore
+from nanobot.agent.store import MemoryStoreProtocol
 from nanobot.agent.skills import SkillsLoader
 from nanobot.utils.helpers import build_assistant_message, current_time_str, detect_image_mime
 
@@ -28,7 +29,7 @@ class ContextBuilder:
         self.workspace = workspace
         self.timezone = timezone
         self._on_skills_loaded = on_skills_loaded
-        self.memory = SqliteMemoryStore(workspace)
+        self.memory: MemoryStoreProtocol = SqliteMemoryStore(workspace)
         self.skills = SkillsLoader(workspace)
         self._topic_rules_cache: dict[str, str] = {}
 
