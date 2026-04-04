@@ -779,16 +779,15 @@ class TelegramChannel(BaseChannel):
             name = self._topic_store.get_topic_mapping(chat_id, thread_id)
             if name:
                 self._topic_names[thread_id] = name
+                # Update placeholder chat_id=0 with real chat_id
+                self._topic_store.set_topic_mapping(chat_id, thread_id, name)
                 return name
 
         # 3. forum_topic_created event
         forum_topic = getattr(message, "forum_topic_created", None)
         if forum_topic and getattr(forum_topic, "name", ""):
-            name = forum_topic.name
-            self._topic_names[thread_id] = name
-            if self._topic_store:
-                self._topic_store.set_topic_mapping(chat_id, thread_id, name)
-            return name
+            self._persist_topic_name(chat_id, thread_id, forum_topic.name)
+            return forum_topic.name
 
         return None
 
@@ -842,6 +841,13 @@ class TelegramChannel(BaseChannel):
 
         if migrated:
             logger.info("Migrated {} topic_id mappings from TOPIC.md files", migrated)
+
+    def _persist_topic_name(self, chat_id: int, thread_id: int, name: str) -> None:
+        """Persist topic name to cache and DB."""
+        self._topic_names[thread_id] = name
+        if self._topic_store:
+            self._topic_store.set_topic_mapping(chat_id, thread_id, name)
+        logger.debug("Persisted topic mapping: thread_id={} -> '{}'", thread_id, name)
 
     @staticmethod
     def _extract_reply_context(message) -> str | None:
