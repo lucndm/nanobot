@@ -55,6 +55,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+postgres = ["psycopg[binary,pool]>=3.1"]
 wecom = [
     "wecom-aibot-sdk-python>=0.1.5",
 ]
