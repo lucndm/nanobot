@@ -60,6 +60,9 @@ class LiteLLMProvider(LLMProvider):
         if config.default_headers:
             litellm.default_headers = config.default_headers
 
+        # Drop unsupported params (e.g. reasoning_effort for non-OpenAI models)
+        litellm.drop_params = True
+
     async def chat(
         self,
         messages: list[dict[str, Any]],
