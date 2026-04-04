@@ -122,6 +122,7 @@ class LiteLLMProvider(LLMProvider):
                     **kwargs,
                     api_base=self._proxy_base,
                     api_key=self._proxy_key,
+                    custom_llm_provider="openai",
                 )
                 return self._parse_response(response)
         except (httpx.ConnectError, httpx.TimeoutException) as exc:
@@ -146,6 +147,7 @@ class LiteLLMProvider(LLMProvider):
                     **kwargs,
                     api_base=self._proxy_base,
                     api_key=self._proxy_key,
+                    custom_llm_provider="openai",
                 )
                 return await self._consume_stream(response_stream, on_content_delta)
         except (httpx.ConnectError, httpx.TimeoutException) as exc:
