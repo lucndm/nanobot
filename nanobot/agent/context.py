@@ -40,7 +40,7 @@ class ContextBuilder:
         Returns None if no topic rules file exists.
         """
         if not topic_name:
-            logger.debug("No topic_name in metadata, skipping topic rules")
+            logger.debug("No topic_name, skipping topic rules")
             return None
 
         # Normalize: lowercase, replace spaces/special chars with hyphens
