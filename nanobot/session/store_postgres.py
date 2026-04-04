@@ -95,6 +95,17 @@ class PostgresSessionStore:
                 "last_consolidated": last_consolidated,
             }
 
+    @staticmethod
+    def _sanitize_for_pg(obj: Any) -> Any:
+        """Recursively strip null bytes from strings — PostgreSQL JSONB rejects \\u0000."""
+        if isinstance(obj, str):
+            return obj.replace("\u0000", "")
+        if isinstance(obj, dict):
+            return {k: PostgresSessionStore._sanitize_for_pg(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [PostgresSessionStore._sanitize_for_pg(v) for v in obj]
+        return obj
+
     def save(self, session_data: dict[str, Any]) -> None:
         key = session_data["key"]
         now = session_data.get("updated_at", datetime.now().isoformat())
@@ -110,14 +121,14 @@ class PostgresSessionStore:
                 "ON CONFLICT(key) DO UPDATE SET "
                 "updated_at=excluded.updated_at, metadata=excluded.metadata, "
                 "last_consolidated=excluded.last_consolidated",
-                (key, created_at, now, json.dumps(metadata), last_consolidated),
+                (key, created_at, now, json.dumps(self._sanitize_for_pg(metadata)), last_consolidated),
             )
             # Replace all messages for this session
             conn.execute("DELETE FROM session_messages WHERE session_key = %s", (key,))
             if messages:
-                # Strip null bytes from JSON — PostgreSQL JSONB rejects \u0000
+                # Strip null bytes from messages — PostgreSQL JSONB rejects \u0000
                 rows = [
-                    (key, i, json.dumps(msg, ensure_ascii=False).replace("\u0000", ""))
+                    (key, i, json.dumps(self._sanitize_for_pg(msg), ensure_ascii=False))
                     for i, msg in enumerate(messages)
                 ]
                 with conn.cursor() as cur:
