@@ -39,6 +39,7 @@ class ContextBuilder:
         Returns None if no topic rules file exists.
         """
         if not topic_name:
+            logger.debug("No topic_name in metadata, skipping topic rules")
             return None
 
         # Normalize: lowercase, replace spaces/special chars with hyphens
@@ -60,7 +61,7 @@ class ContextBuilder:
                 logger.warning("Failed to load topic rules for {}: {}", key, e)
                 return None
 
-        logger.debug("No topic rules found for '{}' at {}", topic_name, topic_file)
+        logger.warning("Topic '{}' resolved but no TOPIC.md at {}", topic_name, topic_file)
         return None
 
     def invalidate_topic_cache(self, topic_name: str | None = None) -> None:
