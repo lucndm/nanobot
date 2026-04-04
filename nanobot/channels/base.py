@@ -25,16 +25,18 @@ class BaseChannel(ABC):
     display_name: str = "Base"
     transcription_api_key: str = ""
 
-    def __init__(self, config: Any, bus: MessageBus):
+    def __init__(self, config: Any, bus: MessageBus, workspace: Path | None = None):
         """
         Initialize the channel.
 
         Args:
             config: Channel-specific configuration.
             bus: The message bus for communication.
+            workspace: Path to the workspace directory (optional).
         """
         self.config = config
         self.bus = bus
+        self.workspace = workspace
         self._running = False
 
         # Observability: channel message counter
