@@ -29,6 +29,7 @@ from nanobot.bus.queue import MessageBus
 from nanobot.command import CommandContext, CommandRouter, register_builtin_commands
 from nanobot.providers.base import LLMProvider
 from nanobot.session.manager import Session, SessionManager
+from nanobot.session.store import create_session_store
 
 if TYPE_CHECKING:
     from nanobot.config.schema import ChannelsConfig, ExecToolConfig, OtelConfig, WebSearchConfig
@@ -68,6 +69,7 @@ class AgentLoop:
         channels_config: ChannelsConfig | None = None,
         timezone: str | None = None,
         otel_config: OtelConfig | None = None,
+        config: Any | None = None,
     ):
         from nanobot.config.schema import ExecToolConfig, WebSearchConfig
 
@@ -92,7 +94,15 @@ class AgentLoop:
 
         migrate_files_to_sqlite(workspace)
 
-        self.sessions = session_manager or SessionManager(workspace)
+        if session_manager:
+            self.sessions = session_manager
+        elif config is not None:
+            store = create_session_store(config, workspace)
+            self.sessions = SessionManager(store)
+        else:
+            from nanobot.session.store_jsonl import JsonlSessionStore
+
+            self.sessions = SessionManager(JsonlSessionStore(workspace))
         self.tools = ToolRegistry()
         self.runner = AgentRunner(provider)
         self.subagents = SubagentManager(

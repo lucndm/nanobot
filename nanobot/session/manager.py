@@ -1,18 +1,16 @@
 """Session management for conversation history."""
 
-import json
-import shutil
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from loguru import logger
 from opentelemetry.metrics import Observation
 
-from nanobot.config.paths import get_legacy_sessions_dir
 from nanobot.observability.otel import get_meter
-from nanobot.utils.helpers import ensure_dir, safe_filename
+from nanobot.session.store import SessionStoreProtocol
 
 
 @dataclass
@@ -95,7 +93,9 @@ class Session:
         self.last_consolidated = 0
         self.updated_at = datetime.now()
 
-    def retain_recent_legal_suffix(self, max_messages: int, *, high_value_ids: set[int] | None = None) -> None:
+    def retain_recent_legal_suffix(
+        self, max_messages: int, *, high_value_ids: set[int] | None = None
+    ) -> None:
         """Keep a legal recent suffix, mirroring get_history boundary rules.
 
         When high_value_ids is provided, prefer keeping messages whose
@@ -126,7 +126,9 @@ class Session:
         # and any retained messages are not, swap them.
         if high_value_ids:
             dropped = self.messages[: len(self.messages) - len(retained)]
-            retained_non_hv = [m for m in retained if m.get("telegram_message_id") not in high_value_ids]
+            retained_non_hv = [
+                m for m in retained if m.get("telegram_message_id") not in high_value_ids
+            ]
             dropped_hv = [m for m in dropped if m.get("telegram_message_id") in high_value_ids]
             # Swap up to min(count) messages from dropped high-value with retained non-high-value
             swap_count = min(len(dropped_hv), len(retained_non_hv))
@@ -135,7 +137,11 @@ class Session:
                 new_retained = []
                 hv_idx = 0
                 for m in retained:
-                    if swap_count > 0 and m.get("telegram_message_id") not in high_value_ids and hv_idx < len(dropped_hv):
+                    if (
+                        swap_count > 0
+                        and m.get("telegram_message_id") not in high_value_ids
+                        and hv_idx < len(dropped_hv)
+                    ):
                         new_retained.append(dropped_hv[hv_idx])
                         hv_idx += 1
                         swap_count -= 1
@@ -153,13 +159,17 @@ class SessionManager:
     """
     Manages conversation sessions.
 
-    Sessions are stored as JSONL files in the sessions directory.
+    Delegates persistence to a SessionStoreProtocol backend (JSONL or PostgreSQL).
+    Accepts either a store instance or a workspace Path (backward compatible).
     """
 
-    def __init__(self, workspace: Path):
-        self.workspace = workspace
-        self.sessions_dir = ensure_dir(self.workspace / "sessions")
-        self.legacy_sessions_dir = get_legacy_sessions_dir()
+    def __init__(self, store_or_workspace: SessionStoreProtocol | Path):
+        if isinstance(store_or_workspace, Path):
+            from nanobot.session.store_jsonl import JsonlSessionStore
+
+            self._store: SessionStoreProtocol = JsonlSessionStore(store_or_workspace)
+        else:
+            self._store = store_or_workspace
         self._cache: dict[str, Session] = {}
 
         meter = get_meter()
@@ -172,16 +182,6 @@ class SessionManager:
 
     def _observe_active_sessions(self, options):
         yield Observation(len(self._cache), attributes={})
-
-    def _get_session_path(self, key: str) -> Path:
-        """Get the file path for a session."""
-        safe_key = safe_filename(key.replace(":", "_"))
-        return self.sessions_dir / f"{safe_key}.jsonl"
-
-    def _get_legacy_session_path(self, key: str) -> Path:
-        """Legacy global session path (~/.nanobot/sessions/)."""
-        safe_key = safe_filename(key.replace(":", "_"))
-        return self.legacy_sessions_dir / f"{safe_key}.jsonl"
 
     def get_or_create(self, key: str) -> Session:
         """
@@ -196,86 +196,21 @@ class SessionManager:
         if key in self._cache:
             return self._cache[key]
 
-        session = self._load(key)
-        if session is None:
-            session = Session(key=key)
+        data = self._store.get_or_create(key)
+        session = self._data_to_session(data)
 
         self._cache[key] = session
         return session
 
-    def _load(self, key: str) -> Session | None:
-        """Load a session from disk."""
-        path = self._get_session_path(key)
-        if not path.exists():
-            legacy_path = self._get_legacy_session_path(key)
-            if legacy_path.exists():
-                try:
-                    shutil.move(str(legacy_path), str(path))
-                    logger.info("Migrated session {} from legacy path", key)
-                except Exception:
-                    logger.exception("Failed to migrate session {}", key)
-
-        if not path.exists():
-            return None
-
-        try:
-            messages = []
-            metadata = {}
-            created_at = None
-            last_consolidated = 0
-
-            with open(path, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-
-                    data = json.loads(line)
-
-                    if data.get("_type") == "metadata":
-                        metadata = data.get("metadata", {})
-                        created_at = (
-                            datetime.fromisoformat(data["created_at"])
-                            if data.get("created_at")
-                            else None
-                        )
-                        last_consolidated = data.get("last_consolidated", 0)
-                    else:
-                        messages.append(data)
-
-            return Session(
-                key=key,
-                messages=messages,
-                created_at=created_at or datetime.now(),
-                metadata=metadata,
-                last_consolidated=last_consolidated,
-            )
-        except Exception as e:
-            logger.warning("Failed to load session {}: {}", key, e)
-            return None
-
     def save(self, session: Session) -> None:
-        """Save a session to disk."""
-        path = self._get_session_path(session.key)
-
-        with open(path, "w", encoding="utf-8") as f:
-            metadata_line = {
-                "_type": "metadata",
-                "key": session.key,
-                "created_at": session.created_at.isoformat(),
-                "updated_at": session.updated_at.isoformat(),
-                "metadata": session.metadata,
-                "last_consolidated": session.last_consolidated,
-            }
-            f.write(json.dumps(metadata_line, ensure_ascii=False) + "\n")
-            for msg in session.messages:
-                f.write(json.dumps(msg, ensure_ascii=False) + "\n")
-
+        """Save a session via the store backend."""
+        self._store.save(self._session_to_data(session))
         self._cache[session.key] = session
 
     def invalidate(self, key: str) -> None:
         """Remove a session from the in-memory cache."""
         self._cache.pop(key, None)
+        self._store.invalidate(key)
 
     def list_sessions(self) -> list[dict[str, Any]]:
         """
@@ -284,26 +219,33 @@ class SessionManager:
         Returns:
             List of session info dicts.
         """
-        sessions = []
+        return self._store.list_sessions()
 
-        for path in self.sessions_dir.glob("*.jsonl"):
-            try:
-                # Read just the metadata line
-                with open(path, encoding="utf-8") as f:
-                    first_line = f.readline().strip()
-                    if first_line:
-                        data = json.loads(first_line)
-                        if data.get("_type") == "metadata":
-                            key = data.get("key") or path.stem.replace("_", ":", 1)
-                            sessions.append(
-                                {
-                                    "key": key,
-                                    "created_at": data.get("created_at"),
-                                    "updated_at": data.get("updated_at"),
-                                    "path": str(path),
-                                }
-                            )
-            except Exception:
-                continue
+    @staticmethod
+    def _data_to_session(data: dict[str, Any]) -> Session:
+        """Convert store data dict to Session object."""
+        created_at = data.get("created_at", "")
+        try:
+            created_at_dt = datetime.fromisoformat(created_at)
+        except (ValueError, TypeError):
+            created_at_dt = datetime.now()
 
-        return sorted(sessions, key=lambda x: x.get("updated_at", ""), reverse=True)
+        return Session(
+            key=data["key"],
+            messages=data.get("messages", []),
+            created_at=created_at_dt,
+            metadata=data.get("metadata", {}),
+            last_consolidated=data.get("last_consolidated", 0),
+        )
+
+    @staticmethod
+    def _session_to_data(session: Session) -> dict[str, Any]:
+        """Convert Session object to store data dict."""
+        return {
+            "key": session.key,
+            "messages": session.messages,
+            "created_at": session.created_at.isoformat(),
+            "updated_at": session.updated_at.isoformat(),
+            "metadata": session.metadata,
+            "last_consolidated": session.last_consolidated,
+        }
