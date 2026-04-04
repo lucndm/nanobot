@@ -188,6 +188,15 @@ class OtelConfig(Base):
     service_name: str = "nanobot"
 
 
+class DatabaseConfig(Base):
+    """Database backend configuration."""
+
+    backend: Literal["sqlite", "postgres"] = "sqlite"
+    url: str = ""
+    pool_size: int = 5
+    sqlite_path: str = "data/memories.db"
+
+
 class Config(BaseSettings):
     """Root configuration for nanobot."""
 
@@ -197,6 +206,7 @@ class Config(BaseSettings):
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     otel: OtelConfig = Field(default_factory=OtelConfig)
+    database: DatabaseConfig = Field(default_factory=DatabaseConfig)
 
     @property
     def workspace_path(self) -> Path:
