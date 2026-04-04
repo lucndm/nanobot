@@ -992,3 +992,97 @@ async def test_on_help_includes_restart_command() -> None:
     help_text = update.message.reply_text.await_args.args[0]
     assert "/restart" in help_text
     assert "/status" in help_text
+
+
+class TestTopicResolution:
+    """Test topic name resolution with DB-backed persistence."""
+
+    def _make_channel(self, tmp_path, bus=None):
+        """Create a TelegramChannel with workspace for DB access."""
+        if bus is None:
+            bus = AsyncMock(spec=MessageBus)
+        config = TelegramConfig(token="test-token", allow_from=["*"])
+        ch = TelegramChannel(config, bus)
+        ch.workspace = tmp_path
+        # Initialize the topic store now that workspace is set
+        from nanobot.agent.memory import SqliteMemoryStore
+
+        ch._topic_store = SqliteMemoryStore(tmp_path)
+        return ch
+
+    def _make_message(self, thread_id, chat_id=-1003738155502, topic_name=None):
+        """Create a fake Telegram message with thread_id."""
+        msg = SimpleNamespace(
+            chat_id=chat_id,
+            chat=SimpleNamespace(type="supergroup", is_forum=True),
+            message_thread_id=thread_id,
+            forum_topic_created=SimpleNamespace(name=topic_name) if topic_name else None,
+        )
+        return msg
+
+    def test_resolve_from_cache(self, tmp_path):
+        ch = self._make_channel(tmp_path)
+        ch._topic_names[4] = "Finance"
+        msg = self._make_message(thread_id=4)
+        assert ch._resolve_topic_name(msg) == "Finance"
+
+    def test_resolve_from_db_when_not_in_cache(self, tmp_path):
+        ch = self._make_channel(tmp_path)
+        # Persist to DB directly
+        ch._topic_store.set_topic_mapping(-1003738155502, 6, "General")
+        msg = self._make_message(thread_id=6)
+        assert ch._resolve_topic_name(msg) == "General"
+        # Now also in cache
+        assert ch._topic_names[6] == "General"
+
+    def test_resolve_from_forum_topic_created_event(self, tmp_path):
+        ch = self._make_channel(tmp_path)
+        msg = self._make_message(thread_id=558, topic_name="Skills Map")
+        assert ch._resolve_topic_name(msg) == "Skills Map"
+        # Persisted to DB
+        assert ch._topic_store.get_topic_mapping(-1003738155502, 558) == "Skills Map"
+
+    def test_resolve_returns_none_for_private_chat(self, tmp_path):
+        ch = self._make_channel(tmp_path)
+        msg = SimpleNamespace(
+            chat_id=12345,
+            chat=SimpleNamespace(type="private"),
+            message_thread_id=None,
+        )
+        assert ch._resolve_topic_name(msg) is None
+
+    def test_resolve_returns_none_when_no_thread_id(self, tmp_path):
+        ch = self._make_channel(tmp_path)
+        msg = SimpleNamespace(
+            chat_id=-1003738155502,
+            chat=SimpleNamespace(type="supergroup"),
+            message_thread_id=None,
+        )
+        assert ch._resolve_topic_name(msg) is None
+
+    def test_preload_on_startup(self, tmp_path):
+        # Setup: persist mappings in DB
+        ch = self._make_channel(tmp_path)
+        ch._topic_store.set_topic_mapping(-1003738155502, 4, "Finance")
+        ch._topic_store.set_topic_mapping(-1003738155502, 6, "General")
+
+        # Simulate fresh channel (empty cache)
+        ch2 = self._make_channel(tmp_path)
+        assert 4 not in ch2._topic_names
+
+        # Preload
+        ch2._preload_topic_mappings()
+        assert ch2._topic_names[4] == "Finance"
+        assert ch2._topic_names[6] == "General"
+
+    def test_placeholder_chat_id_updated_on_resolve(self, tmp_path):
+        ch = self._make_channel(tmp_path)
+        # Create a placeholder mapping with chat_id=0
+        ch._topic_store.set_topic_mapping(0, 99, "Ideas")
+        # Resolve with real chat_id should update the placeholder
+        msg = self._make_message(thread_id=99, chat_id=-1003738155502)
+        assert ch._resolve_topic_name(msg) == "Ideas"
+        # Verify the mapping now has the real chat_id
+        assert ch._topic_store.get_topic_mapping(-1003738155502, 99) == "Ideas"
+        # Placeholder should be gone
+        assert ch._topic_store.get_topic_mapping(0, 99) is None

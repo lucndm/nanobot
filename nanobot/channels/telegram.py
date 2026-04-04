@@ -782,6 +782,14 @@ class TelegramChannel(BaseChannel):
                 # Update placeholder chat_id=0 with real chat_id
                 self._topic_store.set_topic_mapping(chat_id, thread_id, name)
                 return name
+            # Fallback: check placeholder with chat_id=0 (from TOPIC.md migration)
+            name = self._topic_store.get_topic_mapping(0, thread_id)
+            if name:
+                self._topic_names[thread_id] = name
+                # Migrate placeholder to real chat_id
+                self._topic_store.set_topic_mapping(chat_id, thread_id, name)
+                self._topic_store.delete_topic_mapping(0, thread_id)
+                return name
 
         # 3. forum_topic_created event
         forum_topic = getattr(message, "forum_topic_created", None)
