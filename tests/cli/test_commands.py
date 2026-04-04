@@ -322,31 +322,20 @@ def test_openai_codex_strip_prefix_supports_hyphen_and_underscore():
     assert _strip_model_prefix("openai_codex/gpt-5.1-codex") == "gpt-5.1-codex"
 
 
-def test_make_provider_passes_extra_headers_to_custom_provider():
+def test_make_provider_passes_litellm_config():
     config = Config.model_validate(
         {
-            "agents": {"defaults": {"provider": "custom", "model": "gpt-4o-mini"}},
-            "providers": {
-                "custom": {
-                    "apiKey": "test-key",
-                    "apiBase": "https://example.com/v1",
-                    "extraHeaders": {
-                        "APP-Code": "demo-app",
-                        "x-session-affinity": "sticky-session",
-                    },
-                }
+            "agents": {"defaults": {"model": "gpt-4o-mini"}},
+            "litellm": {
+                "apiBase": "https://example.com/v1",
+                "apiKey": "test-key",
             },
         }
     )
 
-    with patch("nanobot.providers.openai_compat_provider.AsyncOpenAI") as mock_async_openai:
-        _make_provider(config)
+    provider = _make_provider(config)
 
-    kwargs = mock_async_openai.call_args.kwargs
-    assert kwargs["api_key"] == "test-key"
-    assert kwargs["base_url"] == "https://example.com/v1"
-    assert kwargs["default_headers"]["APP-Code"] == "demo-app"
-    assert kwargs["default_headers"]["x-session-affinity"] == "sticky-session"
+    assert provider.get_default_model() == "gpt-4o-mini"
 
 
 @pytest.fixture

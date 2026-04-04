@@ -1,56 +1,40 @@
-"""Test _make_provider creates FallbackProvider when fallback is configured."""
-
-from unittest.mock import patch
+"""Test _make_provider creates LiteLLMProvider with correct settings."""
 
 from nanobot.config.schema import Config
 
 
-def _config_with_fallback(fallback_model=None, fallback_provider=None):
+def _config_with_model(model="gpt-4o-mini"):
     data = {
         "agents": {
             "defaults": {
-                "model": "gpt-4o-mini",
-                "provider": "custom",
+                "model": model,
             },
             "sessions": {},
-        },
-        "providers": {
-            "custom": {"apiKey": "sk-test", "apiBase": "http://localhost:4000/v1"},
-            "openrouter": {"apiKey": "sk-or-test"},
         },
         "channels": {},
         "gateway": {},
     }
-    if fallback_model:
-        data["agents"]["defaults"]["fallbackModel"] = fallback_model
-    if fallback_provider:
-        data["agents"]["defaults"]["fallbackProvider"] = fallback_provider
     return Config(**data)
 
 
-def test_no_fallback_when_not_configured():
+def test_make_provider_creates_litellm_provider():
     from nanobot.cli.commands import _make_provider
-    from nanobot.providers.fallback_provider import FallbackProvider
+    from nanobot.providers.litellm_provider import LiteLLMProvider
 
-    config = _config_with_fallback()
+    config = _config_with_model()
+    provider = _make_provider(config)
 
-    with patch("nanobot.providers.openai_compat_provider.AsyncOpenAI"):
-        provider = _make_provider(config)
-
-    assert not isinstance(provider, FallbackProvider)
+    assert isinstance(provider, LiteLLMProvider)
 
 
-def test_fallback_provider_created_when_configured():
+def test_make_provider_sets_generation_settings():
     from nanobot.cli.commands import _make_provider
-    from nanobot.providers.fallback_provider import FallbackProvider
 
-    config = _config_with_fallback(
-        fallback_model="openrouter/free",
-        fallback_provider="openrouter",
-    )
+    config = _config_with_model()
+    config.agents.defaults.temperature = 0.7
+    config.agents.defaults.max_tokens = 4096
 
-    with patch("nanobot.providers.openai_compat_provider.AsyncOpenAI"):
-        provider = _make_provider(config)
+    provider = _make_provider(config)
 
-    assert isinstance(provider, FallbackProvider)
-    assert provider.fallback_model == "openrouter/free"
+    assert provider.generation.temperature == 0.7
+    assert provider.generation.max_tokens == 4096
