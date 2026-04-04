@@ -516,6 +516,7 @@ class AgentLoop:
                 chat_id=chat_id,
                 current_role=current_role,
                 topic_name=msg.metadata.get("topic_name"),
+                topic_resolved=msg.metadata.get("topic_resolved", True),
             )
             final_content, _, all_msgs = await self._run_agent_loop(
                 messages,
@@ -574,6 +575,7 @@ class AgentLoop:
             channel=msg.channel,
             chat_id=msg.chat_id,
             topic_name=msg.metadata.get("topic_name"),
+            topic_resolved=msg.metadata.get("topic_resolved", True),
         )
 
         async def _bus_progress(content: str, *, tool_hint: bool = False) -> None:

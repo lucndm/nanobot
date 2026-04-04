@@ -1049,6 +1049,9 @@ class TelegramChannel(BaseChannel):
         topic_name = await self._resolve_topic_name(message)
         if topic_name:
             meta["topic_name"] = topic_name
+            meta["topic_resolved"] = True
+        else:
+            meta["topic_resolved"] = False
         logger.info(
             "Command in chat_id={}, thread_id={}, topic={}",
             message.chat_id,
@@ -1122,6 +1125,9 @@ class TelegramChannel(BaseChannel):
         topic_name = await self._resolve_topic_name(message)
         if topic_name:
             metadata["topic_name"] = topic_name
+            metadata["topic_resolved"] = True
+        else:
+            metadata["topic_resolved"] = False
         thread_id = getattr(message, "message_thread_id", None)
         logger.info(
             "Message in chat_id={}, thread_id={}, topic={}, forum={}",

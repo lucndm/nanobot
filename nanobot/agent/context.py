@@ -78,8 +78,16 @@ class ContextBuilder:
         skill_names: list[str] | None = None,
         user_mood: str | None = None,
         topic_name: str | None = None,
+        topic_resolved: bool = True,
     ) -> str:
-        """Build the system prompt from identity, bootstrap files, memory, skills, and topic rules."""
+        """Build the system prompt from identity, bootstrap files, memory, skills, and topic rules.
+
+        Args:
+            topic_name: The resolved topic name, or None if unknown.
+            topic_resolved: False when topic could not be resolved (no DB/API entry).
+                In this case no TOPIC.md is loaded and the bot is instructed to ask
+                the user which topic they are in.
+        """
         parts = [self._get_identity()]
 
         # Add mood-based response adjustment
@@ -127,9 +135,17 @@ Skills with available="false" need dependencies installed first - you can try in
 {skills_summary}""")
 
         # Inject topic-specific rules (highest priority — last in prompt)
-        topic_rules = self.load_topic_rules(topic_name)
-        if topic_rules:
-            parts.append(f"# Topic Rules ({topic_name})\n\n{topic_rules}")
+        if topic_resolved:
+            topic_rules = self.load_topic_rules(topic_name)
+            if topic_rules:
+                parts.append(f"# Topic Rules ({topic_name})\n\n{topic_rules}")
+        else:
+            # Topic could not be resolved — instruct the bot to ask the user
+            parts.append(
+                "# Topic\n\nYou do NOT know which topic this conversation belongs to. "
+                "Ask the user: \"Which topic is this?\" Do NOT guess or assume. "
+                "Wait for their answer before applying any topic rules."
+            )
 
         return "\n\n---\n\n".join(parts)
 
@@ -213,6 +229,7 @@ IMPORTANT: To send files (images, documents, audio, video) to the user, you MUST
         current_role: str = "user",
         user_mood: str | None = None,
         topic_name: str | None = None,
+        topic_resolved: bool = True,
     ) -> list[dict[str, Any]]:
         """Build the complete message list for an LLM call."""
         runtime_ctx = self._build_runtime_context(channel, chat_id, self.timezone)
@@ -228,7 +245,7 @@ IMPORTANT: To send files (images, documents, audio, video) to the user, you MUST
         return [
             {
                 "role": "system",
-                "content": self.build_system_prompt(skill_names, user_mood, topic_name),
+                "content": self.build_system_prompt(skill_names, user_mood, topic_name, topic_resolved),
             },
             *history,
             {"role": current_role, "content": merged},
