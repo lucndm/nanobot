@@ -806,11 +806,20 @@ class TelegramChannel(BaseChannel):
                 return name
 
         # 3. Telegram API: fetch topic info for unmapped topics
+        # python-telegram-bot doesn't wrap getForumTopicInfo yet, so call via HTTP
         if self._app and thread_id > 1:  # thread_id=1 is General topic
             try:
-                topic_info = await self._app.bot.get_forum_topic_info(chat_id, thread_id)
-                if topic_info and getattr(topic_info, "name", ""):
-                    name = topic_info.name
+                import httpx
+
+                url = f"https://api.telegram.org/bot{self._app.bot.token}/getForumTopicInfo"
+                async with httpx.AsyncClient() as client:
+                    resp = await client.post(
+                        url,
+                        data={"chat_id": str(chat_id), "message_thread_id": str(thread_id)},
+                    )
+                    body = resp.json()
+                if body.get("ok") and body.get("result", {}).get("name"):
+                    name = body["result"]["name"]
                     self._persist_topic_name(chat_id, thread_id, name)
                     return name
             except Exception as e:
@@ -1032,6 +1041,12 @@ class TelegramChannel(BaseChannel):
         topic_name = await self._resolve_topic_name(message)
         if topic_name:
             meta["topic_name"] = topic_name
+        logger.info(
+            "Command in chat_id={}, thread_id={}, topic={}",
+            message.chat_id,
+            getattr(message, "message_thread_id", None),
+            topic_name or "(none)",
+        )
 
         await self._handle_message(
             sender_id=self._sender_id(user),
@@ -1095,17 +1110,18 @@ class TelegramChannel(BaseChannel):
         logger.debug("Telegram message from {}: {}...", sender_id, content[:50])
 
         str_chat_id = str(chat_id)
-        logger.info(
-            "THREAD_DEBUG: chat_id={}, thread_id={}, is_forum={}, is_group={}",
-            str_chat_id,
-            getattr(message, "message_thread_id", None),
-            getattr(message.chat, "is_forum", False),
-            message.chat.type != "private",
-        )
         metadata = self._build_message_metadata(message, user)
         topic_name = await self._resolve_topic_name(message)
         if topic_name:
             metadata["topic_name"] = topic_name
+        thread_id = getattr(message, "message_thread_id", None)
+        logger.info(
+            "Message in chat_id={}, thread_id={}, topic={}, forum={}",
+            str_chat_id,
+            thread_id,
+            topic_name or "(none)",
+            getattr(message.chat, "is_forum", False),
+        )
         session_key = self._derive_topic_session_key(message)
 
         # Telegram media groups: buffer briefly, forward as one aggregated turn.
