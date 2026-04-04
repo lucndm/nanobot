@@ -218,3 +218,81 @@ async def test_get_default_model():
 
         provider = LiteLLMProvider(_proxy_config(), "gpt-4o")
     assert provider.get_default_model() == "gpt-4o"
+
+
+# --- Proxy Mode: custom_llm_provider and drop_params ---
+
+
+@pytest.mark.asyncio
+async def test_proxy_mode_sets_custom_llm_provider_to_openai():
+    """Proxy mode must use custom_llm_provider='openai' to pass model name as-is."""
+    mock_acompletion = AsyncMock(return_value=_fake_response())
+
+    with patch("nanobot.providers.litellm_provider.litellm") as mock_litellm:
+        mock_litellm.acompletion = mock_acompletion
+        from nanobot.providers.litellm_provider import LiteLLMProvider
+
+        provider = LiteLLMProvider(_proxy_config(), "minimax/MiniMax-M2.7")
+        result = await provider.chat(messages=[{"role": "user", "content": "hi"}])
+
+    assert result.content == "ok"
+    call_kwargs = mock_acompletion.call_args.kwargs
+    assert call_kwargs["custom_llm_provider"] == "openai"
+    assert call_kwargs["model"] == "minimax/MiniMax-M2.7"
+
+
+@pytest.mark.asyncio
+async def test_proxy_stream_mode_sets_custom_llm_provider_to_openai():
+    """Proxy streaming mode must also use custom_llm_provider='openai'."""
+    mock_chunk = MagicMock()
+    mock_chunk.choices = [MagicMock(delta=MagicMock(content="hi", tool_calls=None))]
+    mock_chunk.usage = MagicMock(prompt_tokens=5, completion_tokens=2, total_tokens=7)
+
+    async def _aiter():
+        yield mock_chunk
+
+    with patch("nanobot.providers.litellm_provider.litellm") as mock_litellm:
+        mock_litellm.acompletion = AsyncMock(return_value=_aiter())
+        from nanobot.providers.litellm_provider import LiteLLMProvider
+
+        provider = LiteLLMProvider(_proxy_config(), "minimax/MiniMax-M2.7")
+        await provider.chat_stream(
+            messages=[{"role": "user", "content": "hi"}],
+            on_content_delta=AsyncMock(),
+        )
+
+    call_kwargs = mock_litellm.acompletion.call_args.kwargs
+    assert call_kwargs["custom_llm_provider"] == "openai"
+
+
+@pytest.mark.asyncio
+async def test_init_sets_drop_params():
+    """LiteLLMProvider.__init__ must set litellm.drop_params=True."""
+    with patch("nanobot.providers.litellm_provider.litellm") as mock_litellm:
+        from nanobot.providers.litellm_provider import LiteLLMProvider
+
+        LiteLLMProvider(_proxy_config(), "gpt-4o")
+
+    assert mock_litellm.drop_params is True
+
+
+@pytest.mark.asyncio
+async def test_proxy_mode_passes_slashed_model_name_unchanged():
+    """Model names with slashes (e.g. 'minimax/MiniMax-M2.7') must not be parsed by litellm."""
+    mock_acompletion = AsyncMock(return_value=_fake_response())
+
+    with patch("nanobot.providers.litellm_provider.litellm") as mock_litellm:
+        mock_litellm.acompletion = mock_acompletion
+        from nanobot.providers.litellm_provider import LiteLLMProvider
+
+        provider = LiteLLMProvider(_proxy_config(), "minimax/MiniMax-M2.7")
+        await provider.chat(
+            messages=[{"role": "user", "content": "test"}],
+            reasoning_effort="medium",
+        )
+
+    call_kwargs = mock_acompletion.call_args.kwargs
+    # Model name passed as-is to proxy
+    assert call_kwargs["model"] == "minimax/MiniMax-M2.7"
+    # custom_llm_provider prevents litellm from parsing provider prefix
+    assert call_kwargs["custom_llm_provider"] == "openai"
