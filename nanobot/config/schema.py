@@ -1,5 +1,6 @@
 """Configuration schema using Pydantic."""
 
+import os
 from pathlib import Path
 from typing import Literal
 
@@ -197,6 +198,56 @@ class DatabaseConfig(Base):
     sqlite_path: str = "data/memories.db"
 
 
+class LiteLLMModelConfig(Base):
+    """A single model entry for litellm Router."""
+
+    model_name: str
+    litellm_params: dict[str, str]
+
+
+class LiteLLMConfig(Base):
+    """LiteLLM client configuration.
+
+    Supports two modes:
+    - proxy: calls go through a litellm proxy server (api_base required)
+    - direct: calls go through an in-process litellm Router (models required)
+    Proxy is primary; direct is used when proxy is unavailable.
+    """
+
+    api_base: str | None = None
+    api_key: str | None = None
+    models: list[LiteLLMModelConfig] = Field(default_factory=list)
+    fallbacks: list[dict[str, list[str]]] = Field(default_factory=list)
+    default_headers: dict[str, str] = Field(default_factory=dict)
+    success_callback: list[str] = Field(default_factory=list)
+    failure_callback: list[str] = Field(default_factory=list)
+    mode: Literal["proxy", "direct"] | None = None
+
+    def model_post_init(self, __context: object) -> None:
+        # Auto-detect mode: proxy if api_base set, direct if models configured, else proxy
+        if self.mode is None:
+            if self.api_base:
+                self.mode = "proxy"
+            elif self.models:
+                self.mode = "direct"
+            else:
+                self.mode = "proxy"
+
+        # Resolve ${ENV_VAR} in api_key
+        if self.api_key and self.api_key.startswith("${") and self.api_key.endswith("}"):
+            env_var = self.api_key[2:-1]
+            self.api_key = os.environ.get(env_var, "")
+
+        # Resolve ${ENV_VAR} in model litellm_params api_key
+        for model in self.models:
+            params = model.litellm_params
+            if "api_key" in params:
+                val = params["api_key"]
+                if isinstance(val, str) and val.startswith("${") and val.endswith("}"):
+                    env_var = val[2:-1]
+                    params["api_key"] = os.environ.get(env_var, "")
+
+
 class Config(BaseSettings):
     """Root configuration for nanobot."""
 
@@ -207,6 +258,7 @@ class Config(BaseSettings):
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     otel: OtelConfig = Field(default_factory=OtelConfig)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
+    litellm: LiteLLMConfig = Field(default_factory=LiteLLMConfig)
 
     @property
     def workspace_path(self) -> Path:
