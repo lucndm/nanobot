@@ -7,6 +7,7 @@ import re
 import time
 import unicodedata
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal
 
 from loguru import logger
@@ -224,10 +225,10 @@ class TelegramChannel(BaseChannel):
 
     _STREAM_EDIT_INTERVAL = 0.6  # min seconds between edit_message_text calls
 
-    def __init__(self, config: Any, bus: MessageBus):
+    def __init__(self, config: Any, bus: MessageBus, workspace: Path | None = None):
         if isinstance(config, dict):
             config = TelegramConfig.model_validate(config)
-        super().__init__(config, bus)
+        super().__init__(config, bus, workspace=workspace)
         self.config: TelegramConfig = config
         self._app: Application | None = None
         self._chat_ids: dict[str, int] = {}  # Map sender_id to chat_id for replies
