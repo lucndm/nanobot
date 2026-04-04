@@ -23,7 +23,9 @@ class PostgresMemoryStore:
         )
         self._pool.open()
         self._init_tables()
-        logger.info("PostgresMemoryStore connected to {}", dsn.split("@")[-1] if "@" in dsn else dsn)
+        logger.info(
+            "PostgresMemoryStore connected to {}", dsn.split("@")[-1] if "@" in dsn else dsn
+        )
 
     def _init_tables(self) -> None:
         with self._pool.connection() as conn:
@@ -67,7 +69,9 @@ class PostgresMemoryStore:
                     UNIQUE(chat_id, message_id, emoji)
                 )
             """)
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_reactions_chat ON message_reactions(chat_id)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_reactions_chat ON message_reactions(chat_id)"
+            )
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS message_sentiment (
                     chat_id TEXT NOT NULL,
@@ -80,7 +84,9 @@ class PostgresMemoryStore:
                     PRIMARY KEY (chat_id, message_id)
                 )
             """)
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_sentiment_topic ON message_sentiment(topic)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sentiment_topic ON message_sentiment(topic)"
+            )
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS emoji_sentiment (
                     emoji TEXT PRIMARY KEY,
@@ -207,7 +213,9 @@ class PostgresMemoryStore:
 
     def load_all_topic_mappings(self) -> dict[tuple[int, int], str]:
         with self._pool.connection() as conn:
-            rows = conn.execute("SELECT chat_id, thread_id, topic_name FROM topic_mapping").fetchall()
+            rows = conn.execute(
+                "SELECT chat_id, thread_id, topic_name FROM topic_mapping"
+            ).fetchall()
         return {(r[0], r[1]): r[2] for r in rows}
 
     # ── Reactions & Sentiment ────────────────────────────────────

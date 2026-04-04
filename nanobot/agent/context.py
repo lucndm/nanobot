@@ -9,8 +9,8 @@ from typing import Any
 from loguru import logger
 
 from nanobot.agent.memory import SqliteMemoryStore
-from nanobot.agent.store import MemoryStoreProtocol
 from nanobot.agent.skills import SkillsLoader
+from nanobot.agent.store import MemoryStoreProtocol
 from nanobot.utils.helpers import build_assistant_message, current_time_str, detect_image_mime
 
 

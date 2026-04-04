@@ -23,6 +23,7 @@ from telegram.ext import (
 )
 from telegram.request import HTTPXRequest
 
+from nanobot.agent.store import MemoryStoreProtocol
 from nanobot.bus.events import OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
@@ -31,7 +32,6 @@ from nanobot.config.schema import Base
 from nanobot.observability.otel import get_meter
 from nanobot.security.network import validate_url_target
 from nanobot.utils.helpers import split_message
-from nanobot.agent.store import MemoryStoreProtocol
 
 TELEGRAM_MAX_MESSAGE_LEN = 4000  # Telegram message character limit
 TELEGRAM_REPLY_CONTEXT_MAX_LEN = (
