@@ -1148,6 +1148,9 @@ class TelegramChannel(BaseChannel):
         if topic_name:
             meta["topic_name"] = topic_name
             meta["topic_resolved"] = True
+            key = topic_name.lower().replace(" ", "-").replace("_", "-").strip("-")
+            topic_file = self.workspace / "topics" / key / "TOPIC.md"
+            meta["topic_configured"] = topic_file.exists()
         else:
             meta["topic_resolved"] = False
         logger.info(
@@ -1224,6 +1227,9 @@ class TelegramChannel(BaseChannel):
         if topic_name:
             metadata["topic_name"] = topic_name
             metadata["topic_resolved"] = True
+            key = topic_name.lower().replace(" ", "-").replace("_", "-").strip("-")
+            topic_file = self.workspace / "topics" / key / "TOPIC.md"
+            metadata["topic_configured"] = topic_file.exists()
         else:
             metadata["topic_resolved"] = False
         thread_id = getattr(message, "message_thread_id", None)

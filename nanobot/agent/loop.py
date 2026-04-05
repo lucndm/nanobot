@@ -543,6 +543,7 @@ class AgentLoop:
                 current_role=current_role,
                 topic_name=msg.metadata.get("topic_name"),
                 topic_resolved=msg.metadata.get("topic_resolved", True),
+                topic_configured=msg.metadata.get("topic_configured", True),
             )
             messages = build_result["messages"]
             final_content, _, all_msgs = await self._run_agent_loop(
@@ -611,6 +612,7 @@ class AgentLoop:
             chat_id=msg.chat_id,
             topic_name=msg.metadata.get("topic_name"),
             topic_resolved=msg.metadata.get("topic_resolved", True),
+            topic_configured=msg.metadata.get("topic_configured", True),
         )
         initial_messages = build_result["messages"]
         system_prompt_hash = build_result["_system_prompt_hash"]

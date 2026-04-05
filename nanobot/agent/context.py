@@ -88,6 +88,7 @@ class ContextBuilder:
         user_mood: str | None = None,
         topic_name: str | None = None,
         topic_resolved: bool = True,
+        topic_configured: bool = True,
     ) -> str:
         """Build the system prompt from identity, bootstrap files, memory, skills, and topic rules.
 
@@ -96,6 +97,8 @@ class ContextBuilder:
             topic_resolved: False when topic could not be resolved (no DB/API entry).
                 In this case no TOPIC.md is loaded and the bot is instructed to ask
                 the user which topic they are in.
+            topic_configured: False when a topic name is resolved but no TOPIC.md
+                file exists. The bot is instructed to ask the user to set up the topic.
         """
         parts = [self._get_identity()]
 
@@ -144,7 +147,16 @@ Skills with available="false" need dependencies installed first - you can try in
 {skills_summary}""")
 
         # Inject topic-specific rules (highest priority — last in prompt)
-        if topic_resolved:
+        if topic_name and topic_resolved and not topic_configured:
+            # Topic name is known but no TOPIC.md exists — prompt user to set it up
+            parts.append(
+                "# Unconfigured Topic\n"
+                "The user is in a topic that hasn't been set up yet. "
+                "Ask them what this topic is for, then create a TOPIC.md file "
+                f"at workspace/topics/{topic_name.lower().replace(' ', '-')}/TOPIC.md "
+                "using the write_file tool."
+            )
+        elif topic_resolved:
             topic_rules = self.load_topic_rules(topic_name)
             if topic_rules:
                 parts.append(f"# Topic Rules ({topic_name})\n\n{topic_rules}")
@@ -239,6 +251,7 @@ IMPORTANT: To send files (images, documents, audio, video) to the user, you MUST
         user_mood: str | None = None,
         topic_name: str | None = None,
         topic_resolved: bool = True,
+        topic_configured: bool = True,
     ) -> dict[str, Any]:
         """Build the complete message list for an LLM call.
 
@@ -257,7 +270,7 @@ IMPORTANT: To send files (images, documents, audio, video) to the user, you MUST
             merged = [{"type": "text", "text": runtime_ctx}] + user_content
 
         system_prompt = self.build_system_prompt(
-            skill_names, user_mood, topic_name, topic_resolved
+            skill_names, user_mood, topic_name, topic_resolved, topic_configured
         )
         system_hash = hashlib.sha256(system_prompt.encode()).hexdigest()
 
