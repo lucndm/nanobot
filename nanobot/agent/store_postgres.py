@@ -268,25 +268,35 @@ class PostgresMemoryStore:
         DB is source of truth:
         - Topics in DB  -> create/update TOPIC.md from DB content
         - Topics on disk but NOT in DB -> delete orphan topic directory
+
+        Note: topic_name is normalized (lowercase, spaces→hyphens) to derive
+        the directory path, matching the convention used by context.py and
+        setup_topic.py.
         """
         import shutil
+
+        def _topic_key(topic_name: str) -> str:
+            return topic_name.lower().replace(" ", "-").replace("_", "-").strip("-")
 
         topics_dir = workspace / "topics"
         topics_dir.mkdir(parents=True, exist_ok=True)
 
         db_topics = {row[0] for row in self._list_topic_litellm()}
+        # Map normalized key -> original topic_name
+        db_key_to_name = {_topic_key(t): t for t in db_topics}
 
-        # Delete orphan dirs (on disk but not in DB)
+        # Delete orphan dirs (on disk but not in DB), using normalized keys
         for topic_dir in topics_dir.iterdir():
             if not topic_dir.is_dir():
                 continue
-            if topic_dir.name not in db_topics:
+            if topic_dir.name not in db_key_to_name:
                 shutil.rmtree(topic_dir)
                 logger.info("sync_topic_files: removed orphan topic dir '{}'", topic_dir.name)
 
         # Sync topics from DB -> create or update files
         for topic_name in db_topics:
-            topic_dir = topics_dir / topic_name
+            key = _topic_key(topic_name)
+            topic_dir = topics_dir / key
             topic_dir.mkdir(parents=True, exist_ok=True)
 
             litellm_config = self.get_topic_litellm(topic_name)
