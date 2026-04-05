@@ -9,7 +9,7 @@ from loguru import logger
 
 from nanobot.bus.events import OutboundMessage
 from nanobot.bus.queue import MessageBus
-from nanobot.channels.base import BaseChannel
+from nanobot.channels.telegram import TelegramChannel
 from nanobot.config.schema import Config
 
 # Retry delays for message sending (exponential backoff: 1s, 2s, 4s)
@@ -35,37 +35,25 @@ class ChannelManager:
         self._init_channels()
 
     def _init_channels(self) -> None:
-        """Initialize channels discovered via pkgutil scan + entry_points plugins."""
-        from nanobot.channels.registry import discover_all
+        """Initialize Telegram channel directly."""
+        cfg = self.config.channel
+        if not cfg.enabled:
+            return
+        try:
+            workspace = getattr(self.config, "workspace_path", None)
+            channel = TelegramChannel(cfg, self.bus, workspace=workspace)
+            channel.transcription_api_key = self.config.litellm.groq_api_key
+            # Share the memory store with channels for topic mapping
+            if workspace is not None and not hasattr(self, "_memory_store"):
+                from nanobot.agent.store import create_memory_store
 
-        groq_key = self.config.litellm.groq_api_key
-
-        for name, cls in discover_all().items():
-            section = getattr(self.config.channels, name, None)
-            if section is None:
-                continue
-            enabled = (
-                section.get("enabled", False)
-                if isinstance(section, dict)
-                else getattr(section, "enabled", False)
-            )
-            if not enabled:
-                continue
-            try:
-                workspace = getattr(self.config, "workspace_path", None)
-                channel = cls(section, self.bus, workspace=workspace)
-                channel.transcription_api_key = groq_key
-                # Share the memory store with channels for topic mapping
-                if workspace is not None and not hasattr(self, "_memory_store"):
-                    from nanobot.agent.store import create_memory_store
-
-                    self._memory_store = create_memory_store(self.config, workspace)
-                if hasattr(self, "_memory_store"):
-                    channel.topic_store = self._memory_store
-                self.channels[name] = channel
-                logger.info("{} channel enabled", cls.display_name)
-            except Exception as e:
-                logger.warning("{} channel not available: {}", name, e)
+                self._memory_store = create_memory_store(self.config, workspace)
+            if hasattr(self, "_memory_store"):
+                channel.topic_store = self._memory_store
+            self.channels["telegram"] = channel
+            logger.info("Telegram channel enabled")
+        except Exception as e:
+            logger.warning("Telegram channel not available: {}", e)
 
         self._validate_allow_from()
 
@@ -139,11 +127,11 @@ class ChannelManager:
                     msg = await asyncio.wait_for(self.bus.consume_outbound(), timeout=1.0)
 
                 if msg.metadata.get("_progress"):
-                    if msg.metadata.get("_tool_hint") and not self.config.channels.send_tool_hints:
+                    if msg.metadata.get("_tool_hint") and not self.config.channel.send_tool_hints:
                         continue
                     if (
                         not msg.metadata.get("_tool_hint")
-                        and not self.config.channels.send_progress
+                        and not self.config.channel.send_progress
                     ):
                         continue
 
@@ -230,7 +218,7 @@ class ChannelManager:
         - BadRequest: non-retryable (e.g. message too long)
         - CancelledError: re-raised for graceful shutdown
         """
-        max_attempts = max(self.config.channels.send_max_retries, 1)
+        max_attempts = max(self.config.channel.send_max_retries, 1)
 
         for attempt in range(max_attempts):
             try:
