@@ -183,7 +183,11 @@ class AgentLoop:
         self.tools.register(SpawnTool(manager=self.subagents))
         if self._topic_store:
             self.tools.register(
-                SetupTopicTool(workspace=self.workspace, topic_store=self._topic_store)
+                SetupTopicTool(
+                    workspace=self.workspace,
+                    topic_store=self._topic_store,
+                    provider=self.provider,
+                )
             )
         if self.cron_service:
             self.tools.register(

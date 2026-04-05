@@ -406,3 +406,12 @@ class LiteLLMProvider(LLMProvider):
             return True
 
         return model in self._available_models
+
+    def get_available_models(self) -> set[str]:
+        """Return the cached set of available models from the proxy.
+
+        Returns an empty set if no models have been fetched yet.
+        """
+        if self._available_models is None:
+            return set()
+        return self._available_models
