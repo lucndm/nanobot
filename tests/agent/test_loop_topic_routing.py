@@ -25,6 +25,9 @@ def _make_loop():
     loop.tools = MagicMock()
     loop.tools.get_definitions.return_value = []
     loop._otel_config = None  # Needed to avoid AttributeError in _run_agent_loop
+    # Mock provider with is_model_available (returns True to allow all models in tests)
+    loop.provider = MagicMock()
+    loop.provider.is_model_available = MagicMock(return_value=True)
     return loop
 
 
@@ -120,4 +123,30 @@ class TestTopicModelRouting:
         spec = loop.runner.run.call_args[0][0]
         assert spec.model == "topic/model"
         assert spec.temperature is None
+        assert spec.max_tokens is None
+
+    @pytest.mark.asyncio
+    async def test_invalid_topic_model_falls_back_to_default(self):
+        loop = _make_loop()
+        loop.provider.is_model_available = MagicMock(return_value=False)
+        topic_config = TopicConfig(model="invalid/model", temperature=0.9, max_tokens=2048)
+        loop.context.get_topic_config.return_value = topic_config
+        loop.runner.run.return_value = MagicMock(usage={}, stop_reason="stop")
+
+        await loop._run_agent_loop(
+            initial_messages=[],
+            on_progress=MagicMock(),
+            on_stream=MagicMock(),
+            on_stream_end=MagicMock(),
+            channel="telegram",
+            chat_id="123",
+            message_id=1,
+            message_thread_id=42,
+            topic_name="bad-model-topic",
+        )
+
+        spec = loop.runner.run.call_args[0][0]
+        # Should fall back to default model when is_model_available returns False
+        assert spec.model == "default/model"
+        assert spec.temperature is None  # Also cleared on fallback
         assert spec.max_tokens is None

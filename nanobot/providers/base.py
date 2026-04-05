@@ -400,4 +400,10 @@ class LLMProvider(ABC):
     @abstractmethod
     def get_default_model(self) -> str:
         """Get the default model for this provider."""
-        pass
+
+    def is_model_available(self, model: str) -> bool:
+        """Check if a model is available. Override in subclasses for actual validation.
+
+        Default returns True (trust all models) for backward compatibility.
+        """
+        return True

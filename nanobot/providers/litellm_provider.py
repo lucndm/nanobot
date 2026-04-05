@@ -53,6 +53,10 @@ class LiteLLMProvider(LLMProvider):
                 cooldown_time=config.cooldown_time,
             )
 
+        # Cached set of available models from proxy
+        self._available_models: set[str] | None = None
+        self._models_fetched_at: float = 0.0
+
         # Register OTel callback
         try:
             otel_cb = OTelCallback()
@@ -134,7 +138,9 @@ class LiteLLMProvider(LLMProvider):
 
     async def _do_chat(self, kwargs: dict[str, Any]) -> LLMResponse:
         """Execute a chat call with proxy->direct fallback."""
-        system_prompt, non_system_messages = self._extract_system_message(kwargs.pop("messages", []))
+        system_prompt, non_system_messages = self._extract_system_message(
+            kwargs.pop("messages", [])
+        )
         if system_prompt is not None:
             kwargs["messages"] = non_system_messages
             kwargs["system"] = self._apply_caching_markers(system_prompt)
@@ -164,7 +170,9 @@ class LiteLLMProvider(LLMProvider):
         self, kwargs: dict[str, Any], on_content_delta: Callable | None
     ) -> LLMResponse:
         """Execute a streaming chat call with proxy->direct fallback."""
-        system_prompt, non_system_messages = self._extract_system_message(kwargs.pop("messages", []))
+        system_prompt, non_system_messages = self._extract_system_message(
+            kwargs.pop("messages", [])
+        )
         if system_prompt is not None:
             kwargs["messages"] = non_system_messages
             kwargs["system"] = self._apply_caching_markers(system_prompt)
@@ -234,7 +242,9 @@ class LiteLLMProvider(LLMProvider):
                 details = getattr(chunk.usage, "prompt_tokens_details", None)
                 if details:
                     usage["cache_read_tokens"] = getattr(details, "cache_read_input_tokens", 0) or 0
-                    usage["cache_creation_tokens"] = getattr(details, "cache_creation_input_tokens", 0) or 0
+                    usage["cache_creation_tokens"] = (
+                        getattr(details, "cache_creation_input_tokens", 0) or 0
+                    )
 
         content = "".join(content_parts) or None
         tool_calls: list[ToolCallRequest] = []
@@ -312,7 +322,9 @@ class LiteLLMProvider(LLMProvider):
             details = getattr(response.usage, "prompt_tokens_details", None)
             if details:
                 usage["cache_read_tokens"] = getattr(details, "cache_read_input_tokens", 0) or 0
-                usage["cache_creation_tokens"] = getattr(details, "cache_creation_input_tokens", 0) or 0
+                usage["cache_creation_tokens"] = (
+                    getattr(details, "cache_creation_input_tokens", 0) or 0
+                )
 
         thinking_blocks = None
         if hasattr(message, "thinking") and message.thinking:
@@ -355,3 +367,42 @@ class LiteLLMProvider(LLMProvider):
                     self._proxy_available = False
         except Exception:
             self._proxy_available = False
+
+    async def _fetch_available_models(self) -> None:
+        """Fetch available models from proxy and cache them."""
+        if not self._proxy_base:
+            return
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    f"{self._proxy_base}/v1/models",
+                    headers={"Authorization": f"Bearer {self._proxy_key}"},
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    models = {m["id"] for m in data.get("data", [])}
+                    self._available_models = models
+                    self._models_fetched_at = time.monotonic()
+                    logger.debug("Fetched {} available models from proxy", len(models))
+        except Exception as exc:
+            logger.warning("Failed to fetch available models from proxy: {}", exc)
+
+    def is_model_available(self, model: str) -> bool:
+        """Check if a model is available on the proxy.
+
+        Uses cached model list (refreshed every 5 minutes). Falls back to True
+        if cache fetch fails, to avoid false negatives blocking valid models.
+        """
+        # Direct providers (no proxy): trust all models
+        if self._mode != "proxy" or not self._proxy_base:
+            return True
+
+        # Refresh cache if stale (> 5 min) and trigger async fetch
+        if self._available_models is None or time.monotonic() - self._models_fetched_at > 300:
+            # Schedule async refresh if not already fetching
+            if not hasattr(self, "_models_fetch_task") or self._models_fetch_task.done():
+                self._models_fetch_task = asyncio.create_task(self._fetch_available_models())
+            # Optimistic fallback: trust model until we know otherwise
+            return True
+
+        return model in self._available_models

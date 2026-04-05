@@ -342,6 +342,18 @@ class AgentLoop:
                 topic_model = topic_config.model
                 topic_temperature = topic_config.temperature
                 topic_max_tokens = topic_config.max_tokens
+                # Validate model against provider; fall back to default if unavailable
+                if topic_model != self.model and not self.provider.is_model_available(topic_model):
+                    logger.warning(
+                        "Topic '{}' specifies model '{}' which is not available "
+                        "on proxy -- falling back to default '{}'",
+                        topic_name,
+                        topic_model,
+                        self.model,
+                    )
+                    topic_model = self.model
+                    topic_temperature = None
+                    topic_max_tokens = None
 
         result = await self.runner.run(
             AgentRunSpec(
