@@ -12,6 +12,7 @@ from loguru import logger
 from nanobot.agent.memory import SqliteMemoryStore
 from nanobot.agent.skills import SkillsLoader
 from nanobot.agent.store import MemoryStoreProtocol
+from nanobot.agent.topic_config import TopicConfig, parse_topic_config
 from nanobot.utils.helpers import build_assistant_message, current_time_str, detect_image_mime
 
 
@@ -73,6 +74,13 @@ class ContextBuilder:
         else:
             key = topic_name.lower().replace(" ", "-").replace("_", "-").strip("-")
             self._topic_rules_cache.pop(key, None)
+
+    def get_topic_config(self, topic_name: str | None) -> TopicConfig | None:
+        """Extract TopicConfig from the topic's TOPIC.md litellm section."""
+        content = self.load_topic_rules(topic_name)
+        if content is None:
+            return None
+        return parse_topic_config(content)
 
     def build_system_prompt(
         self,
