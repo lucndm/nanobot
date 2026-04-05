@@ -15,21 +15,19 @@ class Base(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
 
-class ChannelsConfig(Base):
-    """Configuration for chat channels.
+class ChannelConfig(Base):
+    """Telegram channel configuration."""
 
-    Built-in and plugin channel configs are stored as extra fields (dicts).
-    Each channel parses its own config in __init__.
-    Per-channel "streaming": true enables streaming output (requires send_delta impl).
-    """
-
-    model_config = ConfigDict(extra="allow")
-
-    send_progress: bool = True  # stream agent's text progress to the channel
-    send_tool_hints: bool = False  # stream tool-call hints (e.g. read_file("..."))
+    enabled: bool = False
+    token: str = ""
+    allow_from: list[str] = Field(default=["*"], alias="allowFrom")
+    group_policy: str = Field(default="mention", alias="groupPolicy")
+    streaming: bool = True
+    send_progress: bool = True
+    send_tool_hints: bool = False
     send_max_retries: int = Field(
         default=3, ge=0, le=10
-    )  # Max delivery attempts (initial send included)
+    )
 
 
 class AgentDefaults(Base):
@@ -216,7 +214,7 @@ class Config(BaseSettings):
     """Root configuration for nanobot."""
 
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
-    channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
+    channel: ChannelConfig = Field(default_factory=ChannelConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     otel: OtelConfig = Field(default_factory=OtelConfig)
