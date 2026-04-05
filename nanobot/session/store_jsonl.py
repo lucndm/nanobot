@@ -136,3 +136,25 @@ class JsonlSessionStore:
             except Exception:
                 continue
         return sorted(sessions, key=lambda x: x.get("updated_at", ""), reverse=True)
+
+    def consolidate(self, session_key: str, topic_name: str, summary: str, last_seq: int) -> None:
+        pass  # JSONL store does not support consolidation
+
+    def get_summary(self, session_key: str, topic_name: str) -> dict | None:
+        return None
+
+    def get_usage(
+        self,
+        *,
+        session_key: str | None = None,
+        topic_name: str | None = None,
+        model: str | None = None,
+        since: Any | None = None,
+    ) -> dict[str, int]:
+        return {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_creation_tokens": 0,
+            "turns": 0,
+        }

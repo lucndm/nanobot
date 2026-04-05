@@ -32,6 +32,25 @@ class SessionStoreProtocol(Protocol):
         """
         ...
 
+    def consolidate(self, session_key: str, topic_name: str, summary: str, last_seq: int) -> None:
+        """Store consolidation summary for a session+topic."""
+        ...
+
+    def get_summary(self, session_key: str, topic_name: str) -> dict | None:
+        """Get consolidation summary. Returns None if no summary exists."""
+        ...
+
+    def get_usage(
+        self,
+        *,
+        session_key: str | None = None,
+        topic_name: str | None = None,
+        model: str | None = None,
+        since: Any | None = None,
+    ) -> dict[str, int]:
+        """Aggregate token usage with optional filters."""
+        ...
+
 
 def create_session_store(config: object, workspace: Path) -> SessionStoreProtocol:
     """Create a session store based on config.database.backend."""
