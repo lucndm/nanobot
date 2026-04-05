@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 
-from nanobot.utils.renderer import KrokiRenderer, render_table_pillow
+from nanobot.utils.renderer import KrokiRenderer, render_ascii_art_pillow, render_table_pillow
 
 # ---------------------------------------------------------------------------
 # KrokiRenderer.is_supported
@@ -213,3 +213,38 @@ class TestRenderTablePillow:
         result = render_table_pillow(table)
         assert result is not None
         assert result[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+# ---------------------------------------------------------------------------
+# render_ascii_art_pillow
+# ---------------------------------------------------------------------------
+
+
+class TestAsciiArtRenderer:
+    def test_basic_box_art_renders(self) -> None:
+        text = "╔═══╗\n║ A ║\n╚═══╝"
+        result = render_ascii_art_pillow(text)
+        assert result.startswith(b"\x89PNG\r\n\x1a\n")
+        assert len(result) > 100
+
+    def test_empty_returns_empty(self) -> None:
+        assert render_ascii_art_pillow("") == b""
+        assert render_ascii_art_pillow("   ") == b""
+
+    def test_wide_art_renders(self) -> None:
+        line = "║" + "═" * 200 + "║"
+        text = f"╔{'═' * 200}╗\n{line}\n╚{'═' * 200}╝"
+        result = render_ascii_art_pillow(text)
+        assert result.startswith(b"\x89PNG\r\n\x1a\n")
+
+    def test_single_line_renders(self) -> None:
+        """Even a single non-empty line produces a valid PNG."""
+        result = render_ascii_art_pillow("Hello")
+        assert result.startswith(b"\x89PNG\r\n\x1a\n")
+
+    def test_many_lines_renders(self) -> None:
+        """Many lines of box art should still produce a valid PNG."""
+        lines = ["║ row " + str(i).zfill(3) + " ║" for i in range(50)]
+        text = "╔═══════════╗\n" + "\n".join(lines) + "\n╚═══════════╝"
+        result = render_ascii_art_pillow(text)
+        assert result.startswith(b"\x89PNG\r\n\x1a\n")

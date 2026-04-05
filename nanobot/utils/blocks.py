@@ -36,6 +36,9 @@ class Block:
 # Languages recognized as diagram types
 _DIAGRAM_LANGS = frozenset({"mermaid", "graphviz", "plantuml", "d2"})
 
+# Box-drawing characters used to detect ASCII art in paragraphs
+_BOX_DRAWING_CHARS = frozenset("╔╗╚╝║═╠╣╦╩╬┌┐└┘│─├┤┬┴┼▶◀►◄▸◂▴▾")
+
 # Compiled patterns
 _RE_HEADING = re.compile(r"^#{1,6}\s+(.+)$")
 _RE_LIST_MARKER = re.compile(r"^[-*]\s+")
@@ -145,6 +148,13 @@ def parse_blocks(text: str) -> list[Block]:
             para_lines.append(peek)
             i += 1
 
-        blocks.append(Block(type=BlockType.PARAGRAPH, content="\n".join(para_lines)))
+        content = "\n".join(para_lines)
+        # Detect box-drawing ASCII art: if >= 3 lines contain box-drawing
+        # characters, treat the paragraph as a DIAGRAM block.
+        box_lines = sum(1 for line in para_lines if any(c in _BOX_DRAWING_CHARS for c in line))
+        if box_lines >= 3:
+            blocks.append(Block(type=BlockType.DIAGRAM, content=content, diagram_type="ascii"))
+        else:
+            blocks.append(Block(type=BlockType.PARAGRAPH, content=content))
 
     return blocks

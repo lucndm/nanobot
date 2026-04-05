@@ -19,6 +19,10 @@ _CELL_PADDING = 8
 _HEADER_BG = "#f0f0f0"
 _LINE_COLOR = "#d0d0d0"
 
+# Colors for ASCII art rendering
+_ASCII_BG = "#1e1e2e"
+_ASCII_FG = "#cdd6f4"
+
 
 def _load_font() -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     for font_path in _FONT_PATHS:
@@ -28,6 +32,23 @@ def _load_font() -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
             except OSError:
                 continue
     return ImageFont.load_default()
+
+
+def _get_monospace_font(size: int = 12) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    """Load a monospace font, falling back to default."""
+    font_paths = [
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"),
+        Path("/usr/share/fonts/TTF/DejaVuSansMono.ttf"),
+        Path("/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf"),
+        Path("/System/Library/Fonts/SFNSMono.ttf"),
+    ]
+    for fp in font_paths:
+        if fp.exists():
+            try:
+                return ImageFont.truetype(str(fp), size)
+            except OSError:
+                continue
+    return ImageFont.load_default(size) if hasattr(ImageFont, "load_default") else ImageFont.load_default()
 
 
 def _parse_markdown_table(text: str) -> list[list[str]] | None:
@@ -169,6 +190,48 @@ def render_table_pillow(table_text: str) -> bytes | None:
         if row_idx < len(rows) - 1:
             draw.line([(0, y), (img_width, y)], fill=_LINE_COLOR, width=1)
             y += 1
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def render_ascii_art_pillow(text: str) -> bytes:
+    """Render ASCII art (box-drawing) to PNG using Pillow.
+
+    Returns PNG bytes. Returns empty bytes for empty/whitespace-only input.
+    """
+    if not text or not text.strip():
+        return b""
+
+    lines = text.split("\n")
+
+    font = _get_monospace_font(size=12)
+
+    line_height = 16
+    cell_padding_x = 8
+    cell_padding_y = 8
+
+    max_line_len = max(len(line) for line in lines) if lines else 1
+
+    try:
+        char_width = font.getlength("M")
+    except (AttributeError, TypeError):
+        char_width = font.size * 0.6
+
+    img_width = int(max_line_len * char_width) + cell_padding_x * 2
+    img_height = len(lines) * line_height + cell_padding_y * 2
+
+    img_width = max(img_width, 100)
+    img_height = max(img_height, 50)
+
+    img = Image.new("RGB", (img_width, img_height), _ASCII_BG)
+    draw = ImageDraw.Draw(img)
+
+    y = cell_padding_y
+    for line in lines:
+        draw.text((cell_padding_x, y), line, fill=_ASCII_FG, font=font)
+        y += line_height
 
     buf = io.BytesIO()
     img.save(buf, format="PNG")

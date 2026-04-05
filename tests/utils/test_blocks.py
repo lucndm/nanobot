@@ -340,3 +340,61 @@ class TestConsecutiveBlocks:
         result = parse_blocks(text)
         assert len(result) == 2
         assert all(b.type == BlockType.HEADING for b in result)
+
+
+# ---------------------------------------------------------------------------
+# Box-drawing ASCII art detection
+# ---------------------------------------------------------------------------
+
+
+class TestBoxDrawingDetection:
+    def test_box_art_detected_as_diagram(self) -> None:
+        text = "╔═══╗\n║ A ║\n╚═══╝"
+        blocks = parse_blocks(text)
+        assert len(blocks) == 1
+        assert blocks[0].type == BlockType.DIAGRAM
+        assert blocks[0].diagram_type == "ascii"
+
+    def test_short_box_art_stays_paragraph(self) -> None:
+        """Less than 3 box-drawing lines stays as paragraph."""
+        text = "╔═══╗\nNormal text"
+        blocks = parse_blocks(text)
+        assert blocks[0].type == BlockType.PARAGRAPH
+
+    def test_mixed_box_art_and_text(self) -> None:
+        text = "╔═══╗\n║ A ║\n╚═══╝\n\nNormal paragraph after."
+        blocks = parse_blocks(text)
+        assert len(blocks) == 2
+        assert blocks[0].type == BlockType.DIAGRAM
+        assert blocks[0].diagram_type == "ascii"
+        assert blocks[1].type == BlockType.PARAGRAPH
+
+    def test_large_box_art_detected(self) -> None:
+        """Multi-line box art with text inside should be detected as diagram."""
+        text = (
+            "╔══════════════╗\n"
+            "║  DASHBOARD   ║\n"
+            "╠══════════════╣\n"
+            "║ CPU: 45%     ║\n"
+            "║ RAM: 2.1GB   ║\n"
+            "║ DISK: 120GB  ║\n"
+            "╚══════════════╝"
+        )
+        blocks = parse_blocks(text)
+        assert len(blocks) == 1
+        assert blocks[0].type == BlockType.DIAGRAM
+        assert blocks[0].diagram_type == "ascii"
+
+    def test_single_box_line_stays_paragraph(self) -> None:
+        """A single line with box-drawing chars stays as paragraph."""
+        text = "║ single line ║"
+        blocks = parse_blocks(text)
+        assert len(blocks) == 1
+        assert blocks[0].type == BlockType.PARAGRAPH
+
+    def test_two_box_lines_stay_paragraph(self) -> None:
+        """Two lines with box-drawing chars stay as paragraph (need >= 3)."""
+        text = "╔═══╗\n╚═══╝"
+        blocks = parse_blocks(text)
+        assert len(blocks) == 1
+        assert blocks[0].type == BlockType.PARAGRAPH

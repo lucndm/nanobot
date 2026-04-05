@@ -33,13 +33,16 @@ from nanobot.config.schema import Base
 from nanobot.observability.otel import get_meter
 from nanobot.security.network import validate_url_target
 from nanobot.utils.blocks import BlockType, parse_blocks
-from nanobot.utils.renderer import KrokiRenderer, render_table_pillow
+from nanobot.utils.renderer import KrokiRenderer, render_ascii_art_pillow, render_table_pillow
 from nanobot.utils.splitter import smart_split_message
 
 TELEGRAM_MAX_MESSAGE_LEN = 4000  # Telegram message character limit
 TELEGRAM_REPLY_CONTEXT_MAX_LEN = (
     TELEGRAM_MAX_MESSAGE_LEN  # Max length for reply context in user message
 )
+
+# Regex for detecting box-drawing characters (used in streaming fallback)
+_BOX_CHARS_RE = re.compile(r"[╔╗╚╝║═╠╣╦╩╬┌┐└┘│─├┤┬┴┼▶◀►◄▸◂▴▾]")
 
 
 def _strip_md(s: str) -> str:
@@ -121,7 +124,6 @@ def _markdown_to_telegram_html(text: str) -> str:
     text = "\n".join(rebuilt)
 
     # 1.6. Auto-wrap box-drawing art in <pre> (╔═╗║┌─┐ etc.)
-    _BOX_CHARS_RE = re.compile(r"[╔╗╚╝║═╠╣╦╩╬┌┐└┘│─├┤┬┴┼▶◀►◄▸◂▴▾]")
     lines = text.split("\n")
     rebuilt: list[str] = []
     li = 0
@@ -669,14 +671,26 @@ class TelegramChannel(BaseChannel):
         for block in blocks:
             # Diagram rendering
             if block.type == BlockType.DIAGRAM and self.config.render_diagrams:
-                image_data = await self._renderer.render(block.content, block.diagram_type)
-                if image_data:
-                    if self._msg_counter:
-                        self._msg_counter.add(
-                            1, attributes={"channel": self.name, "direction": "outbound"}
-                        )
-                    await self._send_image_bytes(chat_id, image_data, reply_params, thread_kwargs)
-                    continue
+                if block.diagram_type == "ascii":
+                    # Render ASCII art as PNG via Pillow
+                    image_data = render_ascii_art_pillow(block.content)
+                    if image_data:
+                        if self._msg_counter:
+                            self._msg_counter.add(
+                                1, attributes={"channel": self.name, "direction": "outbound"}
+                            )
+                        await self._send_image_bytes(chat_id, image_data, reply_params, thread_kwargs)
+                        continue
+                else:
+                    # Render Mermaid/Graphviz/etc via Kroki
+                    image_data = await self._renderer.render(block.content, block.diagram_type)
+                    if image_data:
+                        if self._msg_counter:
+                            self._msg_counter.add(
+                                1, attributes={"channel": self.name, "direction": "outbound"}
+                            )
+                        await self._send_image_bytes(chat_id, image_data, reply_params, thread_kwargs)
+                        continue
                 # Fallback: send as text
                 text_parts.append(f"```{block.diagram_type}\n{block.content}```")
                 continue
