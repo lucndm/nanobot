@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -154,6 +155,9 @@ class PostgresSessionStore:
                 extra = _extract_extra(msg)
                 # Accept both telegram_message_id (legacy) and channel_message_id
                 ch_msg_id = msg.get("channel_message_id") or msg.get("telegram_message_id")
+                # JSONB columns need JSON serialization
+                tool_calls_val = _json_sanitize(msg.get("tool_calls"))
+                extra_val = _json_sanitize(extra)
                 conn.execute(
                     "INSERT INTO turn_log "
                     "(session_key, seq, role, content, tool_calls, tool_call_id, tool_name, "
@@ -164,14 +168,14 @@ class PostgresSessionStore:
                     (
                         key, seq,
                         msg.get("role"), msg.get("content"),
-                        _sanitize(msg.get("tool_calls")),
+                        tool_calls_val,
                         msg.get("tool_call_id"), msg.get("tool_name"),
                         msg.get("model"), msg.get("system_prompt_hash"),
                         msg.get("prompt_tokens", 0), msg.get("completion_tokens", 0),
                         msg.get("cache_read_tokens", 0), msg.get("cache_creation_tokens", 0),
                         msg.get("stop_reason"), msg.get("topic_id"),
                         ch_msg_id,
-                        _sanitize(extra),
+                        extra_val,
                     ),
                 )
             conn.commit()
@@ -281,12 +285,20 @@ def _extract_extra(msg: dict) -> dict:
     return {k: v for k, v in msg.items() if k in _EXTRA_KEYS and v is not None}
 
 
-def _sanitize(obj: Any) -> Any:
+def _json_sanitize(obj: Any) -> str | None:
+    """Strip null bytes and serialize to JSON for PostgreSQL JSONB columns."""
+    if obj is None:
+        return None
+    cleaned = _strip_null_bytes(obj)
+    return json.dumps(cleaned, ensure_ascii=False)
+
+
+def _strip_null_bytes(obj: Any) -> Any:
     """Recursively strip null bytes for PostgreSQL JSONB compatibility."""
     if isinstance(obj, str):
         return obj.replace("\u0000", "")
     if isinstance(obj, dict):
-        return {k: _sanitize(v) for k, v in obj.items()}
+        return {k: _strip_null_bytes(v) for k, v in obj.items()}
     if isinstance(obj, list):
-        return [_sanitize(v) for v in obj]
+        return [_strip_null_bytes(v) for v in obj]
     return obj
