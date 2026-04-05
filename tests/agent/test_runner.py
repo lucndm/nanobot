@@ -333,3 +333,32 @@ async def test_subagent_max_iterations_announces_existing_fallback(tmp_path, mon
     args = mgr._announce_result.await_args.args
     assert args[3] == "Task completed but no final response was generated."
     assert args[5] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_runner_preserves_cache_tokens_in_usage():
+    """AgentRunResult.usage must include cache token fields from provider."""
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
+    from nanobot.agent.tools.registry import ToolRegistry
+
+    provider = MagicMock()
+    provider.chat_with_retry = AsyncMock(return_value=LLMResponse(
+        content="done",
+        tool_calls=[],
+        finish_reason="stop",
+        usage={"prompt_tokens": 10, "completion_tokens": 5,
+               "cache_read_tokens": 500, "cache_creation_tokens": 200},
+        reasoning_content=None,
+        thinking_blocks=None,
+    ))
+
+    runner = AgentRunner(provider=provider)
+    spec = AgentRunSpec(
+        initial_messages=[{"role": "user", "content": "hi"}],
+        tools=ToolRegistry(),
+        model="gpt-4o",
+        max_iterations=1,
+    )
+    result = await runner.run(spec)
+    assert result.usage.get("cache_read_tokens") == 500
+    assert result.usage.get("cache_creation_tokens") == 200

@@ -113,10 +113,14 @@ class AgentRunner:
                 pass
 
             raw_usage = response.usage or {}
-            usage = {
-                "prompt_tokens": int(raw_usage.get("prompt_tokens", 0) or 0),
-                "completion_tokens": int(raw_usage.get("completion_tokens", 0) or 0),
-            }
+            usage = {}
+            for key in (
+                "prompt_tokens", "completion_tokens", "total_tokens",
+                "cache_read_tokens", "cache_creation_tokens",
+            ):
+                val = raw_usage.get(key)
+                if val is not None:
+                    usage[key] = int(val)
             context.response = response
             context.usage = usage
             context.tool_calls = list(response.tool_calls)
