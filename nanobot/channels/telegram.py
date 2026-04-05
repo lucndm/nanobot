@@ -33,7 +33,6 @@ from nanobot.config.schema import Base
 from nanobot.observability.otel import get_meter
 from nanobot.security.network import validate_url_target
 from nanobot.utils.blocks import BlockType, parse_blocks
-from nanobot.utils.helpers import split_message  # noqa: F401 kept for backward compat
 from nanobot.utils.renderer import KrokiRenderer, render_table_pillow
 from nanobot.utils.splitter import smart_split_message
 
