@@ -127,6 +127,9 @@ max_tokens:
 
         # No model specified: list models and ask user to pick one
         if not model:
+            # Persist purpose to topic_memory in PostgreSQL (source of truth)
+            self._topic_store.write_topic_memory(self._topic_name, f"## purpose\n{purpose}\n")
+            self._topic_store.set_topic_mapping(self._chat_id, self._thread_id, self._topic_name)
             models_str = (
                 "\n".join(f"- {m}" for m in available_models)
                 if available_models
@@ -147,13 +150,17 @@ max_tokens:
 
         self._write_topic_file(purpose, model)
 
-        # Persist mapping
+        # Persist mapping and litellm config to PostgreSQL (source of truth)
         self._topic_names[self._thread_id] = self._topic_name
         self._topic_store.set_topic_mapping(self._chat_id, self._thread_id, self._topic_name)
+        self._topic_store.set_topic_litellm(
+            self._topic_name, model, temperature=None, max_tokens=None
+        )
         logger.info(
-            "setup_topic: persisted mapping thread_id={} -> '{}'",
+            "setup_topic: persisted mapping thread_id={} -> '{}', litellm model='{}'",
             self._thread_id,
             self._topic_name,
+            model,
         )
 
         return (
