@@ -33,6 +33,12 @@ class ChannelConfig(Base):
     send_max_retries: int = Field(
         default=3, ge=0, le=10
     )
+    # Renderer settings for smart message formatting
+    kroki_url: str = "https://kroki.io"
+    render_timeout: float = 10.0
+    render_tables: bool = True
+    render_diagrams: bool = True
+    table_max_cols: int = 60
 
 
 class AgentDefaults(Base):
