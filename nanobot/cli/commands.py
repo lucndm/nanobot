@@ -556,7 +556,7 @@ def gateway(
         restrict_to_workspace=config.tools.restrict_to_workspace,
         session_manager=session_manager,
         mcp_servers=config.tools.mcp_servers,
-        channels_config=config.channels,
+        channel_config=config.channel,
         timezone=config.agents.defaults.timezone,
         otel_config=config.otel,
     )
@@ -799,7 +799,7 @@ def agent(
         cron_service=cron,
         restrict_to_workspace=config.tools.restrict_to_workspace,
         mcp_servers=config.tools.mcp_servers,
-        channels_config=config.channels,
+        channel_config=config.channel,
         timezone=config.agents.defaults.timezone,
         config=config,
     )
@@ -808,7 +808,7 @@ def agent(
     _thinking: ThinkingSpinner | None = None
 
     async def _cli_progress(content: str, *, tool_hint: bool = False) -> None:
-        ch = agent_loop.channels_config
+        ch = agent_loop.channel_config
         if ch and tool_hint and not ch.send_tool_hints:
             return
         if ch and not tool_hint and not ch.send_progress:
@@ -894,7 +894,7 @@ def agent(
 
                         if msg.metadata.get("_progress"):
                             is_tool_hint = msg.metadata.get("_tool_hint", False)
-                            ch = agent_loop.channels_config
+                            ch = agent_loop.channel_config
                             if ch and is_tool_hint and not ch.send_tool_hints:
                                 pass
                             elif ch and not is_tool_hint and not ch.send_progress:

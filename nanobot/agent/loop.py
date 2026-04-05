@@ -33,7 +33,7 @@ from nanobot.session.manager import Session, SessionManager
 from nanobot.session.store import create_session_store
 
 if TYPE_CHECKING:
-    from nanobot.config.schema import ChannelsConfig, ExecToolConfig, OtelConfig, WebSearchConfig
+    from nanobot.config.schema import ChannelConfig, ExecToolConfig, OtelConfig, WebSearchConfig
     from nanobot.cron.service import CronService
     from nanobot.observability.hook import OTelHook
 
@@ -67,7 +67,7 @@ class AgentLoop:
         restrict_to_workspace: bool = False,
         session_manager: SessionManager | None = None,
         mcp_servers: dict | None = None,
-        channels_config: ChannelsConfig | None = None,
+        channel_config: ChannelConfig | None = None,
         timezone: str | None = None,
         otel_config: OtelConfig | None = None,
         config: Any | None = None,
@@ -75,7 +75,7 @@ class AgentLoop:
         from nanobot.config.schema import ExecToolConfig, WebSearchConfig
 
         self.bus = bus
-        self.channels_config = channels_config
+        self.channel_config = channel_config
         self.provider = provider
         self.workspace = workspace
         self.model = model or provider.get_default_model()
