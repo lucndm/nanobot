@@ -814,6 +814,13 @@ class TelegramChannel(BaseChannel):
         return chunks
 
     @staticmethod
+    def _has_box_art(text: str) -> bool:
+        """Check if text contains significant box-drawing ASCII art (>= 3 lines)."""
+        _BOX_CHARS = set("╔╗╚╝║═╠╣╦╩╬┌┐└┘│─├┤┬┴┼▶◀►◄▸◂▴▾")
+        box_lines = sum(1 for line in text.split("\n") if any(c in _BOX_CHARS for c in line))
+        return box_lines >= 3
+
+    @staticmethod
     def _is_message_too_long_error(exc: Exception) -> bool:
         return isinstance(exc, BadRequest) and "message is too long" in str(exc).lower()
 
@@ -890,6 +897,32 @@ class TelegramChannel(BaseChannel):
             if stream_id is not None and buf.stream_id is not None and buf.stream_id != stream_id:
                 return
             self._stop_typing(chat_id, meta.get("message_thread_id"))
+
+            # Check for box-drawing ASCII art → render as image instead of text
+            if self.config.render_diagrams and self._has_box_art(buf.text):
+                image_data = render_ascii_art_pillow(buf.text)
+                if image_data:
+                    try:
+                        await self._call_with_retry(
+                            self._app.bot.send_photo,
+                            chat_id=int_chat_id,
+                            photo=image_data,
+                            reply_to_message_id=buf.message_id,
+                        )
+                        # Delete the streaming placeholder message
+                        try:
+                            await self._app.bot.delete_message(
+                                chat_id=int_chat_id, message_id=buf.message_id
+                            )
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        logger.warning("Failed to send box art image, falling back to text: {}", e)
+                        # Fall through to normal text handling below
+                    else:
+                        self._stream_bufs.pop(chat_id, None)
+                        return
+
             try:
                 html = _markdown_to_telegram_html(buf.text)
                 await self._call_with_retry(
