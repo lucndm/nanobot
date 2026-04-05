@@ -743,6 +743,63 @@ class TelegramChannel(BaseChannel):
         return isinstance(exc, BadRequest) and "message is not modified" in str(exc).lower()
 
     @staticmethod
+    def _split_html(html: str, max_len: int) -> list[str]:
+        """Split HTML text at safe boundaries, keeping <pre> blocks intact."""
+        if not html or len(html) <= max_len:
+            return [html] if html else []
+
+        # Split on </pre> boundaries first — never break inside <pre>
+        segments: list[str] = []
+        pos = 0
+        while pos < len(html):
+            pre_start = html.find("<pre>", pos)
+            if pre_start == -1:
+                segments.append(html[pos:])
+                break
+            if pre_start > pos:
+                segments.append(html[pos:pre_start])
+            pre_end = html.find("</pre>", pre_start)
+            if pre_end == -1:
+                segments.append(html[pre_start:])
+                break
+            segments.append(html[pre_start : pre_end + len("</pre>")])
+            pos = pre_end + len("</pre>")
+
+        # Pack segments into chunks
+        chunks: list[str] = []
+        current = ""
+        for seg in segments:
+            if len(current) + len(seg) > max_len:
+                if current:
+                    chunks.append(current)
+                # If single segment exceeds max, hard-split at newlines then words
+                if len(seg) > max_len:
+                    for line in seg.split("\n"):
+                        # Split long lines at word boundaries
+                        while len(line) > max_len:
+                            cut = line[:max_len]
+                            sp = cut.rfind(" ")
+                            if sp > max_len // 2:
+                                chunks.append(line[:sp])
+                                line = line[sp + 1:]
+                            else:
+                                chunks.append(line[:max_len])
+                                line = line[max_len:]
+                        if current and len(current) + len(line) + 1 <= max_len:
+                            current += "\n" + line
+                        else:
+                            if current:
+                                chunks.append(current)
+                            current = line
+                else:
+                    current = seg
+            else:
+                current += seg
+        if current:
+            chunks.append(current)
+        return chunks
+
+    @staticmethod
     def _is_message_too_long_error(exc: Exception) -> bool:
         return isinstance(exc, BadRequest) and "message is too long" in str(exc).lower()
 
@@ -751,18 +808,27 @@ class TelegramChannel(BaseChannel):
         buf: _StreamBuf,
         int_chat_id: int,
         text: str,
+        is_html: bool = False,
     ) -> None:
         """Handle stream-end when text exceeds Telegram message limit.
 
         Edits the existing in-place message with the first chunk, then sends
-        remaining chunks as new messages.
+        remaining chunks as new messages. If *is_html* is True the text is
+        already HTML; otherwise it is raw markdown that needs conversion.
         """
-        chunks = smart_split_message(text, TELEGRAM_MAX_MESSAGE_LEN)
+        if is_html:
+            # Split already-converted HTML — use simple splitter to avoid
+            # re-parsing markdown structure from HTML tags.
+            chunks = self._split_html(text, TELEGRAM_MAX_MESSAGE_LEN)
+        else:
+            chunks = smart_split_message(text, TELEGRAM_MAX_MESSAGE_LEN)
         if not chunks:
             return
 
         # Edit existing message with first chunk
         first_chunk = chunks[0]
+        if not is_html:
+            first_chunk = _markdown_to_telegram_html(first_chunk)
         try:
             await self._call_with_retry(
                 self._app.bot.edit_message_text,
@@ -777,12 +843,13 @@ class TelegramChannel(BaseChannel):
 
         # Send remaining chunks as new messages
         for chunk in chunks[1:]:
+            chunk_html = chunk if is_html else _markdown_to_telegram_html(chunk)
             try:
                 await self._call_with_retry(
                     self._app.bot.send_message,
                     chat_id=int_chat_id,
-                    text=chunk,
-                    parse_mode="HTML" if "<" in chunk else None,
+                    text=chunk_html,
+                    parse_mode="HTML" if "<" in chunk_html else None,
                 )
             except Exception as e:
                 logger.warning("Failed to send overflow chunk: {}", e)
@@ -828,7 +895,7 @@ class TelegramChannel(BaseChannel):
                         "Stream final text too long for edit ({} chars), splitting",
                         len(buf.text),
                     )
-                    await self._send_stream_end_long(buf, int_chat_id, html)
+                    await self._send_stream_end_long(buf, int_chat_id, html, is_html=True)
                     self._stream_bufs.pop(chat_id, None)
                     return
                 logger.debug("Final stream edit failed (HTML), trying plain: {}", e)
