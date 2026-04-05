@@ -73,6 +73,14 @@ class SetupTopicTool(Tool):
                         "that will be written to the ## purpose section."
                     ),
                 },
+                "model": {
+                    "type": "string",
+                    "description": (
+                        "The LLM model to use for this topic "
+                        "(e.g. minimax/MiniMax-M2.7, gpt-4o). "
+                        "Required if not calling setup_topic for the first time."
+                    ),
+                },
             },
             "required": ["purpose"],
         }
@@ -84,7 +92,28 @@ class SetupTopicTool(Tool):
         # Fallback for providers without this method
         return []
 
-    async def execute(self, purpose: str) -> str:
+    def _write_topic_file(self, purpose: str, model: str | None) -> None:
+        """Write the TOPIC.md file."""
+        key = self._topic_name.lower().replace(" ", "-").replace("_", "-").strip("-")
+        topic_dir = self._workspace / "topics" / key
+        topic_dir.mkdir(parents=True, exist_ok=True)
+        topic_file = topic_dir / "TOPIC.md"
+
+        model_line = f"model: {model}" if model else "model:"
+        content = f"""# Topic: {self._topic_name}
+
+## purpose
+{purpose}
+
+## litellm
+{model_line}
+temperature:
+max_tokens:
+"""
+        topic_file.write_text(content, encoding="utf-8")
+        logger.info("setup_topic: wrote TOPIC.md for '{}' at {}", self._topic_name, topic_file)
+
+    async def execute(self, purpose: str, model: str | None = None) -> str:
         if not self._topic_name:
             return "Error: No topic context set. Cannot set up topic without knowing its name."
 
@@ -94,32 +123,29 @@ class SetupTopicTool(Tool):
                 f"thread_id={self._thread_id}). Cannot set up topic."
             )
 
-        # Get available models to include in TOPIC.md
         available_models = self._get_available_models()
-        models_str = (
-            "\n".join(f"- {m}" for m in available_models) if available_models else "(none detected)"
-        )
 
-        key = self._topic_name.lower().replace(" ", "-").replace("_", "-").strip("-")
-        topic_dir = self._workspace / "topics" / key
-        topic_dir.mkdir(parents=True, exist_ok=True)
-        topic_file = topic_dir / "TOPIC.md"
+        # No model specified: list models and ask user to pick one
+        if not model:
+            models_str = (
+                "\n".join(f"- {m}" for m in available_models)
+                if available_models
+                else "(none detected -- proxy may be unreachable)"
+            )
+            return (
+                f"Topic '{self._topic_name}' purpose saved. "
+                f"Available models:\n{models_str}\n\n"
+                "Please tell me which model you want to use, then I'll finalize the TOPIC.md."
+            )
 
-        content = f"""# Topic: {self._topic_name}
+        # Model specified: validate and write TOPIC.md
+        if available_models and model not in available_models:
+            return (
+                f"Model '{model}' is not available on your proxy. "
+                f"Available models:\n" + "\n".join(f"- {m}" for m in available_models)
+            )
 
-## purpose
-{purpose}
-
-## litellm
-# Available models on your proxy:
-{models_str}
-# Replace the model name below with your chosen model from the list above.
-model: <choose from list above>
-temperature:
-max_tokens:
-"""
-        topic_file.write_text(content, encoding="utf-8")
-        logger.info("setup_topic: created TOPIC.md for '{}' at {}", self._topic_name, topic_file)
+        self._write_topic_file(purpose, model)
 
         # Persist mapping
         self._topic_names[self._thread_id] = self._topic_name
@@ -131,8 +157,5 @@ max_tokens:
         )
 
         return (
-            f"Topic '{self._topic_name}' set up successfully. "
-            f"TOPIC.md created at {topic_file} and mapping persisted.\n\n"
-            f"Available models on your proxy:\n{models_str}\n\n"
-            "Please edit the TOPIC.md to select a model from the list above."
+            f"Topic '{self._topic_name}' set up successfully with model={model}. TOPIC.md created."
         )
