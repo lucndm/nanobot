@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from nanobot.agent.store import MemoryStoreProtocol
+from nanobot.agent.store import MemoryStore
 from nanobot.agent.tools.base import Tool
 
 if TYPE_CHECKING:
@@ -25,7 +25,7 @@ class SetupTopicTool(Tool):
     def __init__(
         self,
         workspace: Path,
-        topic_store: MemoryStoreProtocol,
+        topic_store: MemoryStore,
         provider: LLMProvider,
     ):
         self._workspace = workspace

@@ -10,7 +10,7 @@ import pytest
 
 def _make_context(tmp_path):
     with (
-        patch("nanobot.agent.context.SqliteMemoryStore") as mock_store,
+        patch("nanobot.agent.store.MemoryStore") as mock_store,
         patch("nanobot.agent.context.SkillsLoader") as mock_skills,
     ):
         mock_store.return_value.get_memory_context.return_value = ""

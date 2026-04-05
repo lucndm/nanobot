@@ -2,6 +2,7 @@
 
 import base64
 import hashlib
+import os
 import mimetypes
 import platform
 from pathlib import Path
@@ -9,9 +10,8 @@ from typing import Any
 
 from loguru import logger
 
-from nanobot.agent.memory import SqliteMemoryStore
 from nanobot.agent.skills import SkillsLoader
-from nanobot.agent.store import MemoryStoreProtocol
+from nanobot.agent.store import MemoryStore
 from nanobot.agent.topic_config import TopicConfig, parse_topic_config
 from nanobot.utils.helpers import build_assistant_message, current_time_str, detect_image_mime
 
@@ -27,11 +27,14 @@ class ContextBuilder:
         workspace: Path,
         timezone: str | None = None,
         on_skills_loaded=None,
+        memory_store: MemoryStore | None = None,
     ):
         self.workspace = workspace
         self.timezone = timezone
         self._on_skills_loaded = on_skills_loaded
-        self.memory: MemoryStoreProtocol = SqliteMemoryStore(workspace)
+        self.memory: MemoryStore = memory_store or MemoryStore(
+            os.environ.get("NANOBOT_DATABASE_URL", "")
+        )
         self.skills = SkillsLoader(workspace)
         self._topic_rules_cache: dict[tuple[int, int], str] = {}
 
@@ -214,7 +217,7 @@ You are nanobot, a helpful AI assistant.
 
 ## Workspace
 Your workspace is at: {workspace_path}
-- Memory: {workspace_path}/data/memories.db (SQLite, global + per-topic)
+- Memory: PostgreSQL (global + per-topic)
 - Custom skills: {workspace_path}/skills/{{skill-name}}/SKILL.md
 
 {platform_policy}

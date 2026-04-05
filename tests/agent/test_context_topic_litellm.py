@@ -8,7 +8,7 @@ from unittest.mock import patch
 def _make_context(tmp_path):
     """Create a ContextBuilder with mocked dependencies."""
     with (
-        patch("nanobot.agent.context.SqliteMemoryStore") as mock_store,
+        patch("nanobot.agent.store.MemoryStore") as mock_store,
         patch("nanobot.agent.context.SkillsLoader") as mock_skills,
     ):
         mock_store.return_value.get_memory_context.return_value = ""

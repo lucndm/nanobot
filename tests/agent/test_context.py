@@ -12,7 +12,7 @@ import pytest
 async def test_build_messages_returns_system_prompt_hash():
     """build_messages must return dict with 'messages' list and '_system_prompt_hash'."""
     with (
-        patch("nanobot.agent.context.SqliteMemoryStore") as mock_store,
+        patch("nanobot.agent.store.MemoryStore") as mock_store,
         patch("nanobot.agent.context.SkillsLoader") as mock_skills,
     ):
         mock_store.return_value.get_memory_context.return_value = ""
@@ -38,7 +38,7 @@ async def test_build_messages_returns_system_prompt_hash():
 async def test_build_messages_system_prompt_hash_deterministic():
     """Same system prompt must produce the same hash."""
     with (
-        patch("nanobot.agent.context.SqliteMemoryStore") as mock_store,
+        patch("nanobot.agent.store.MemoryStore") as mock_store,
         patch("nanobot.agent.context.SkillsLoader") as mock_skills,
     ):
         mock_store.return_value.get_memory_context.return_value = ""

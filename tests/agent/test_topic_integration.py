@@ -27,7 +27,7 @@ class TestTopicEndToEnd:
         )
 
         with (
-            patch("nanobot.agent.context.SqliteMemoryStore") as mock_store,
+            patch("nanobot.agent.store.MemoryStore") as mock_store,
             patch("nanobot.agent.context.SkillsLoader") as mock_skills,
         ):
             mock_store.return_value.get_memory_context.return_value = ""
@@ -58,7 +58,7 @@ class TestTopicEndToEnd:
         )
 
         with (
-            patch("nanobot.agent.context.SqliteMemoryStore") as mock_store,
+            patch("nanobot.agent.store.MemoryStore") as mock_store,
             patch("nanobot.agent.context.SkillsLoader") as mock_skills,
         ):
             mock_store.return_value.get_memory_context.return_value = ""
@@ -81,7 +81,7 @@ class TestTopicEndToEnd:
         (topic_dir / "TOPIC.md").write_text("## litellm\nmodel: old/model\n")
 
         with (
-            patch("nanobot.agent.context.SqliteMemoryStore") as mock_store,
+            patch("nanobot.agent.store.MemoryStore") as mock_store,
             patch("nanobot.agent.context.SkillsLoader") as mock_skills,
         ):
             mock_store.return_value.get_memory_context.return_value = ""

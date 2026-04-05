@@ -13,7 +13,6 @@ from loguru import logger
 
 from nanobot.agent.context import ContextBuilder
 from nanobot.agent.hook import AgentHook, AgentHookContext
-from nanobot.agent.memory import MemoryConsolidator
 from nanobot.agent.runner import AgentRunner, AgentRunSpec
 from nanobot.agent.skills import BUILTIN_SKILLS_DIR
 from nanobot.agent.subagent import SubagentManager
@@ -31,10 +30,9 @@ from nanobot.bus.queue import MessageBus
 from nanobot.command import CommandContext, CommandRouter, register_builtin_commands
 from nanobot.providers.base import LLMProvider
 from nanobot.session.manager import Session, SessionManager
-from nanobot.session.store import create_session_store
 
 if TYPE_CHECKING:
-    from nanobot.agent.store import MemoryStoreProtocol
+    from nanobot.agent.store import MemoryStore
     from nanobot.config.schema import ChannelConfig, ExecToolConfig, OtelConfig, WebSearchConfig
     from nanobot.cron.service import CronService
     from nanobot.observability.hook import OTelHook
@@ -73,7 +71,8 @@ class AgentLoop:
         timezone: str | None = None,
         otel_config: OtelConfig | None = None,
         config: Any | None = None,
-        topic_store: MemoryStoreProtocol | None = None,
+        topic_store: MemoryStore | None = None,
+        memory_store: MemoryStore | None = None,
     ):
         from nanobot.config.schema import ExecToolConfig, WebSearchConfig
 
@@ -92,22 +91,19 @@ class AgentLoop:
         self._start_time = time.time()
         self._last_usage: dict[str, int] = {}
 
-        self.context = ContextBuilder(workspace, timezone=timezone)
+        self.context = ContextBuilder(workspace, timezone=timezone, memory_store=memory_store)
         self._topic_store = topic_store
-
-        from nanobot.agent.memory_migrate import migrate_files_to_sqlite
-
-        migrate_files_to_sqlite(workspace)
+        self._memory_store = memory_store or (self._topic_store if self._topic_store else None)
 
         if session_manager:
             self.sessions = session_manager
         elif config is not None:
-            store = create_session_store(config, workspace)
-            self.sessions = SessionManager(store)
+            dsn = config.database.url
+            pool_size = config.database.pool_size
+            from nanobot.session.store import SessionStore
+            self.sessions = SessionManager(SessionStore(dsn, pool_size=pool_size))
         else:
-            from nanobot.session.store_jsonl import JsonlSessionStore
-
-            self.sessions = SessionManager(JsonlSessionStore(workspace))
+            raise ValueError("SessionManager or config with database.url required")
         self.tools = ToolRegistry()
         self.runner = AgentRunner(provider)
         self.subagents = SubagentManager(
@@ -134,16 +130,7 @@ class AgentLoop:
         self._concurrency_gate: asyncio.Semaphore | None = (
             asyncio.Semaphore(_max) if _max > 0 else None
         )
-        self.memory_consolidator = MemoryConsolidator(
-            workspace=workspace,
-            provider=provider,
-            model=self.model,
-            sessions=self.sessions,
-            context_window_tokens=context_window_tokens,
-            build_messages=self.context.build_messages,
-            get_tool_definitions=self.tools.get_definitions,
-            max_completion_tokens=provider.generation.max_tokens,
-        )
+        self._max_completion_tokens = provider.generation.max_tokens
         self._register_default_tools()
         self.commands = CommandRouter()
         register_builtin_commands(self.commands)
@@ -555,9 +542,7 @@ class AgentLoop:
             key = f"{channel}:{chat_id}"
             session = self.sessions.get_or_create(key)
             topic_name = msg.metadata.get("topic_name")
-            await self.memory_consolidator.maybe_consolidate_by_tokens(
-                session, topic_name=topic_name
-            )
+            await self._maybe_consolidate(session, topic_name=topic_name)
             self._set_tool_context(
                 channel,
                 chat_id,
@@ -599,7 +584,7 @@ class AgentLoop:
             )
             self.sessions.save(session)
             self._schedule_background(
-                self.memory_consolidator.maybe_consolidate_by_tokens(session, topic_name=topic_name)
+                self._maybe_consolidate(session, topic_name=topic_name)
             )
             return OutboundMessage(
                 channel=channel,
@@ -620,7 +605,7 @@ class AgentLoop:
             return result
 
         topic_name = msg.metadata.get("topic_name")
-        await self.memory_consolidator.maybe_consolidate_by_tokens(session, topic_name=topic_name)
+        await self._maybe_consolidate(session, topic_name=topic_name)
 
         self._set_tool_context(
             msg.channel,
@@ -705,7 +690,7 @@ class AgentLoop:
         )
         self.sessions.save(session)
         self._schedule_background(
-            self.memory_consolidator.maybe_consolidate_by_tokens(session, topic_name=topic_name)
+            self._maybe_consolidate(session, topic_name=topic_name)
         )
 
         if (mt := self.tools.get("message")) and isinstance(mt, MessageTool) and mt._sent_in_turn:
@@ -863,6 +848,101 @@ class AgentLoop:
             on_stream=on_stream,
             on_stream_end=on_stream_end,
         )
+
+    # ── Token-based consolidation ──────────────────────────────
+
+    _MAX_CONSOLIDATION_ROUNDS = 5
+    _SAFETY_BUFFER = 1024
+
+    async def _maybe_consolidate(
+        self, session: Session, topic_name: str | None = None
+    ) -> None:
+        """Archive old messages until prompt fits within safe budget."""
+        store = self._memory_store
+        if not store or not session.messages or self.context_window_tokens <= 0:
+            return
+
+        from nanobot.utils.helpers import estimate_message_tokens, estimate_prompt_tokens_chain
+
+        budget = self.context_window_tokens - self._max_completion_tokens - self._SAFETY_BUFFER
+        target = budget // 2
+
+        # Estimate current prompt size
+        history = session.get_history(max_messages=0)
+        channel, chat_id = session.key.split(":", 1) if ":" in session.key else (None, None)
+        probe_messages = self.context.build_messages(
+            history=history,
+            current_message="[token-probe]",
+            channel=channel,
+            chat_id=chat_id,
+        )
+        if isinstance(probe_messages, dict):
+            probe_messages = probe_messages["messages"]
+        estimated = estimate_prompt_tokens_chain(
+            self.provider, self.model, probe_messages, self.tools.get_definitions()
+        )
+        if estimated <= 0 or estimated < budget:
+            return
+
+        for _ in range(self._MAX_CONSOLIDATION_ROUNDS):
+            if estimated <= target:
+                return
+
+            # Pick boundary: find a user-turn split point that removes enough tokens
+            start = session.last_consolidated
+            if start >= len(session.messages):
+                return
+
+            high_value_ids: set[int] = set()
+            if topic_name:
+                high_value_ids = set(store.get_high_value_messages(topic_name))
+
+            removed_tokens = 0
+            last_boundary = None
+            for idx in range(start, len(session.messages)):
+                message = session.messages[idx]
+                msg_id = message.get("telegram_message_id")
+                if msg_id is not None and msg_id in high_value_ids:
+                    continue
+                if idx > start and message.get("role") == "user":
+                    last_boundary = (idx, removed_tokens)
+                    if removed_tokens >= max(1, estimated - target):
+                        break
+                removed_tokens += estimate_message_tokens(message)
+
+            if last_boundary is None:
+                return
+
+            end_idx = last_boundary[0]
+            chunk = session.messages[start:end_idx]
+            if not chunk:
+                return
+
+            if topic_name:
+                ok = await store.consolidate_topic(topic_name, chunk, self.provider, self.model)
+            else:
+                ok = await store.consolidate(chunk, self.provider, self.model)
+            if not ok:
+                return
+
+            session.last_consolidated = end_idx
+            self.sessions.save(session)
+
+            # Re-estimate
+            history = session.get_history(max_messages=0)
+            probe_messages = self.context.build_messages(
+                history=history,
+                current_message="[token-probe]",
+                channel=channel,
+                chat_id=chat_id,
+            )
+            if isinstance(probe_messages, dict):
+                probe_messages = probe_messages["messages"]
+            estimated = estimate_prompt_tokens_chain(
+                self.provider, self.model, probe_messages, self.tools.get_definitions()
+            )
+            if estimated <= 0:
+                return
 
     async def _detect_user_mood(self, message_text: str, session: Session) -> str:
         """Silent mood detection from user message. Never mention mood to user."""
