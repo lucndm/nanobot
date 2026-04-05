@@ -191,7 +191,7 @@ class TelegramConfig(Base):
     allow_from: list[str] = Field(default_factory=list)
     proxy: str | None = None
     reply_to_message: bool = False
-    react_emoji: str = "👀"
+    react_emoji: str = ""
     group_policy: Literal["open", "mention"] = "mention"
     connection_pool_size: int = 32
     pool_timeout: float = 5.0

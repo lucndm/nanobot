@@ -23,7 +23,7 @@ class ChannelConfig(Base):
     allow_from: list[str] = Field(default=["*"], alias="allowFrom")
     proxy: str | None = None
     reply_to_message: bool = False
-    react_emoji: str = "👀"
+    react_emoji: str = ""
     group_policy: str = Field(default="mention", alias="groupPolicy")
     connection_pool_size: int = 32
     pool_timeout: float = 5.0
