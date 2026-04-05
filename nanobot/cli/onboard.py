@@ -3,7 +3,6 @@
 import json
 import types
 from dataclasses import dataclass
-from functools import lru_cache
 from typing import Any, NamedTuple, get_args, get_origin
 
 try:
@@ -781,85 +780,14 @@ def _configure_litellm(config: Config) -> None:
 # --- Channel Configuration ---
 
 
-@lru_cache(maxsize=1)
-def _get_channel_info() -> dict[str, tuple[str, type[BaseModel]]]:
-    """Get channel info (display name + config class) from channel modules."""
-    import importlib
-
-    from nanobot.channels.registry import discover_all
-
-    result: dict[str, tuple[str, type[BaseModel]]] = {}
-    for name, channel_cls in discover_all().items():
-        try:
-            mod = importlib.import_module(f"nanobot.channels.{name}")
-            config_name = channel_cls.__name__.replace("Channel", "Config")
-            config_cls = getattr(mod, config_name, None)
-            if config_cls and isinstance(config_cls, type) and issubclass(config_cls, BaseModel):
-                display_name = getattr(channel_cls, "display_name", name.capitalize())
-                result[name] = (display_name, config_cls)
-        except Exception:
-            logger.warning(f"Failed to load channel module: {name}")
-    return result
-
-
-def _get_channel_names() -> dict[str, str]:
-    """Get channel display names."""
-    return {name: info[0] for name, info in _get_channel_info().items()}
-
-
-def _get_channel_config_class(channel: str) -> type[BaseModel] | None:
-    """Get channel config class."""
-    entry = _get_channel_info().get(channel)
-    return entry[1] if entry else None
-
-
-def _configure_channel(config: Config, channel_name: str) -> None:
-    """Configure a single channel."""
-    channel_dict = getattr(config.channels, channel_name, None)
-    if channel_dict is None:
-        channel_dict = {}
-        setattr(config.channels, channel_name, channel_dict)
-
-    display_name = _get_channel_names().get(channel_name, channel_name)
-    config_cls = _get_channel_config_class(channel_name)
-
-    if config_cls is None:
-        console.print(f"[red]No configuration class found for {display_name}[/red]")
-        return
-
-    model = config_cls.model_validate(channel_dict) if channel_dict else config_cls()
-
-    updated_channel = _configure_pydantic_model(
-        model,
-        display_name,
-    )
-    if updated_channel is not None:
-        new_dict = updated_channel.model_dump(by_alias=True, exclude_none=True)
-        setattr(config.channels, channel_name, new_dict)
-
-
 def _configure_channels(config: Config) -> None:
-    """Configure chat channels."""
-    channel_names = list(_get_channel_names().keys())
-    choices = channel_names + ["<- Back"]
+    """Configure Telegram channel."""
+    console.clear()
+    _show_section_header("Chat Channel", "Configure Telegram connection settings")
 
-    while True:
-        try:
-            console.clear()
-            _show_section_header(
-                "Chat Channels", "Select a channel to configure connection settings"
-            )
-            answer = _select_with_back("Select channel:", choices)
-
-            if answer is _BACK_PRESSED or answer is None or answer == "<- Back":
-                break
-
-            # Type guard: answer is now guaranteed to be a string
-            assert isinstance(answer, str)
-            _configure_channel(config, answer)
-        except KeyboardInterrupt:
-            console.print("\n[dim]Returning to main menu...[/dim]")
-            break
+    updated = _configure_pydantic_model(config.channel, "Telegram")
+    if updated is not None:
+        config.channel = updated
 
 
 # --- General Settings ---
@@ -957,28 +885,17 @@ def _show_summary(config: Config) -> None:
         litellm_rows.append(("Status", "[dim]not configured[/dim]"))
     _print_summary_panel(litellm_rows, "LiteLLM")
 
-    # Channels
-    channel_rows = []
-    for name, display in _get_channel_names().items():
-        channel = getattr(config.channels, name, None)
-        if channel:
-            enabled = (
-                channel.get("enabled", False)
-                if isinstance(channel, dict)
-                else getattr(channel, "enabled", False)
-            )
-            status = "[green]enabled[/green]" if enabled else "[dim]disabled[/dim]"
-        else:
-            status = "[dim]not configured[/dim]"
-        channel_rows.append((display, status))
-    _print_summary_panel(channel_rows, "Chat Channels")
+    # Channel
+    ch = config.channel
+    status = "[green]enabled[/green]" if ch.enabled else "[dim]disabled[/dim]"
+    _print_summary_panel([("Telegram", status)], "Chat Channel")
 
     # Settings sections
     for title, model in [
         ("Agent Settings", config.agents.defaults),
         ("Gateway", config.gateway),
         ("Tools", config.tools),
-        ("Channel Common", config.channels),
+        ("Channel", config.channel),
     ]:
         _print_summary_panel(_summarize_model(model), title)
 
