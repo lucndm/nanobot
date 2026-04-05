@@ -721,9 +721,9 @@ class AgentLoop:
         for m in messages[skip:]:
             entry = dict(m)
             role, content = entry.get("role"), entry.get("content")
-            # Persist telegram_message_id on the first user message for reaction linking
-            if role == "user" and message_id and "telegram_message_id" not in entry:
-                entry["telegram_message_id"] = message_id
+            # Persist channel_message_id on the first user message for reaction linking
+            if role == "user" and message_id and "channel_message_id" not in entry:
+                entry["channel_message_id"] = message_id
             if role == "assistant" and not content and not entry.get("tool_calls"):
                 continue  # skip empty assistant messages — they poison session context
             if role == "tool":

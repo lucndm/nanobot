@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS turn_log (
     cache_creation_tokens INTEGER DEFAULT 0,
     stop_reason           TEXT,
     topic_name            TEXT,
+    channel_message_id    TEXT,
     extra                 JSONB DEFAULT '{}',
     created_at            TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -83,7 +84,7 @@ class PostgresSessionStore:
                 "SELECT role, content, tool_calls, tool_call_id, tool_name, "
                 "model, system_prompt_hash, prompt_tokens, completion_tokens, "
                 "cache_read_tokens, cache_creation_tokens, stop_reason, "
-                "topic_name, extra, seq "
+                "topic_name, channel_message_id, extra, seq "
                 "FROM turn_log WHERE session_key = %s ORDER BY seq",
                 (key,),
             ).fetchall()
@@ -117,8 +118,12 @@ class PostgresSessionStore:
                 msg["stop_reason"] = row[11]
             if row[12] is not None:
                 msg["topic_name"] = row[12]
-            if row[13] and row[13] != {}:
-                msg.update(row[13])
+            if row[13] is not None:
+                msg["channel_message_id"] = row[13]
+                # Backward compat: also expose as telegram_message_id
+                msg["telegram_message_id"] = row[13]
+            if row[14] and row[14] != {}:
+                msg.update(row[14])
             messages.append(msg)
 
         return {
@@ -147,12 +152,15 @@ class PostgresSessionStore:
             for i, msg in enumerate(new_msgs):
                 seq = existing + i
                 extra = _extract_extra(msg)
+                # Accept both telegram_message_id (legacy) and channel_message_id
+                ch_msg_id = msg.get("channel_message_id") or msg.get("telegram_message_id")
                 conn.execute(
                     "INSERT INTO turn_log "
                     "(session_key, seq, role, content, tool_calls, tool_call_id, tool_name, "
                     "model, system_prompt_hash, prompt_tokens, completion_tokens, "
-                    "cache_read_tokens, cache_creation_tokens, stop_reason, topic_name, extra) "
-                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                    "cache_read_tokens, cache_creation_tokens, stop_reason, topic_name, "
+                    "channel_message_id, extra) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                     (
                         key, seq,
                         msg.get("role"), msg.get("content"),
@@ -162,6 +170,7 @@ class PostgresSessionStore:
                         msg.get("prompt_tokens", 0), msg.get("completion_tokens", 0),
                         msg.get("cache_read_tokens", 0), msg.get("cache_creation_tokens", 0),
                         msg.get("stop_reason"), msg.get("topic_name"),
+                        ch_msg_id,
                         _sanitize(extra),
                     ),
                 )
@@ -263,7 +272,7 @@ def _empty_session(key: str) -> dict[str, Any]:
 
 # Fields that go into the `extra` JSONB column instead of dedicated columns
 _EXTRA_KEYS = frozenset([
-    "reasoning_content", "thinking_blocks", "telegram_message_id",
+    "reasoning_content", "thinking_blocks",
     "timestamp", "total_tokens",
 ])
 
