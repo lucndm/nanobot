@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from nanobot.agent.store import MemoryStore
 from nanobot.bus.events import OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.telegram import TelegramChannel
@@ -29,7 +30,7 @@ class ChannelManager:
     - Route outbound messages
     """
 
-    def __init__(self, config: Config, bus: MessageBus, topic_store=None):
+    def __init__(self, config: Config, bus: MessageBus, topic_store: MemoryStore):
         self.config = config
         self.bus = bus
         self.channels: dict[str, BaseChannel] = {}
@@ -47,13 +48,7 @@ class ChannelManager:
             workspace = getattr(self.config, "workspace_path", None)
             channel = TelegramChannel(cfg, self.bus, workspace=workspace)
             channel.transcription_api_key = self.config.litellm.groq_api_key
-            # Share the memory store with channels for topic mapping
-            if self._topic_store is None and workspace is not None:
-                from nanobot.agent.store import create_memory_store
-
-                self._topic_store = create_memory_store(self.config, workspace)
-            if self._topic_store is not None:
-                channel.topic_store = self._topic_store
+            channel.topic_store = self._topic_store
             self.channels["telegram"] = channel
             logger.info("Telegram channel enabled")
         except Exception as e:

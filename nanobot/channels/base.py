@@ -8,6 +8,7 @@ from typing import Any
 
 from loguru import logger
 
+from nanobot.agent.store import MemoryStore
 from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.observability.otel import get_meter
@@ -24,7 +25,7 @@ class BaseChannel(ABC):
     name: str = "base"
     display_name: str = "Base"
     transcription_api_key: str = ""
-    topic_store: Any = None  # MemoryStoreProtocol, set by ChannelManager
+    topic_store: MemoryStore | None = None
 
     def __init__(self, config: Any, bus: MessageBus, workspace: Path | None = None):
         """

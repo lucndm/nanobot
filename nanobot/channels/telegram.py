@@ -24,7 +24,7 @@ from telegram.ext import (
 )
 from telegram.request import HTTPXRequest
 
-from nanobot.agent.store import MemoryStoreProtocol
+from nanobot.agent.store import MemoryStore
 from nanobot.bus.events import OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
@@ -241,7 +241,7 @@ class TelegramChannel(BaseChannel):
         self._topic_names: dict[int, str] = {}  # thread_id -> topic name
 
         # Topic mapping persistence — set by ChannelManager via topic_store
-        self._topic_store: MemoryStoreProtocol | None = None
+        self._topic_store: MemoryStore | None = None
 
         self._bot_user_id: int | None = None
         self._bot_username: str | None = None

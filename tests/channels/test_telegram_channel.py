@@ -1008,9 +1008,12 @@ class TestTopicResolution:
         ch = TelegramChannel(config, bus)
         ch.workspace = tmp_path
         # Initialize the topic store now that workspace is set
-        from nanobot.agent.memory import SqliteMemoryStore
+        from unittest.mock import patch
 
-        ch._topic_store = SqliteMemoryStore(tmp_path)
+        with patch("nanobot.agent.store.ConnectionPool"):
+            from nanobot.agent.store import MemoryStore
+
+            ch._topic_store = MemoryStore("postgresql://test:test@localhost/test")
         return ch
 
     def _make_message(self, thread_id, chat_id=-1003738155502, topic_name=None):
