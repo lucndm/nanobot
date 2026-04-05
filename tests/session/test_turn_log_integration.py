@@ -16,9 +16,9 @@ pytestmark = pytest.mark.skipif(
 
 def test_full_turn_lifecycle():
     """Verify: save messages with metadata -> get_or_create -> get_usage -> consolidate."""
-    from nanobot.session.store_postgres import PostgresSessionStore
+    from nanobot.session.store import SessionStore
 
-    store = PostgresSessionStore(pg_url, pool_size=2)
+    store = SessionStore(pg_url, pool_size=2)
     key = "test:lifecycle"
 
     # Clean
