@@ -1,82 +1,635 @@
-"""Memory store protocol and factory."""
+"""PostgreSQL-backed memory store with consolidation."""
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Any
+
+from loguru import logger
+from psycopg_pool import ConnectionPool
+
+_POSITIVE_EMOJI = frozenset({"👍", "❤️", "🔥", "💯", "👏", "😊", "🎉", "⭐"})
+_NEGATIVE_EMOJI = frozenset({"👎", "😡", "😢", "🤔", "😤"})
+
+_SAVE_MEMORY_TOOL = [
+    {
+        "type": "function",
+        "function": {
+            "name": "save_memory",
+            "description": "Save memory consolidation result to persistent storage.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "history_entry": {
+                        "type": "string",
+                        "description": "A paragraph summarizing key events/decisions/topics. "
+                        "Start with [YYYY-MM-DD HH:MM]. Include detail useful for grep search.",
+                    },
+                    "memory_update": {
+                        "type": "string",
+                        "description": "Full updated long-term memory as markdown. Include all existing "
+                        "facts plus new ones. Return unchanged if nothing new.",
+                    },
+                },
+                "required": ["history_entry", "memory_update"],
+            },
+        },
+    }
+]
 
 
-@runtime_checkable
-class MemoryStoreProtocol(Protocol):
-    """Interface for memory persistence backends."""
+def _ensure_text(value):
+    """Normalize tool-call payload values to text for file storage."""
+    import json
 
-    # -- Global Memory --
+    return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
 
-    def read_long_term(self) -> str: ...
-    def write_long_term(self, content: str) -> None: ...
-    def read_history(self) -> str: ...
-    def append_history(self, entry: str) -> None: ...
-    def get_memory_context(self) -> str: ...
 
-    # -- Topic Memory --
+def _normalize_save_memory_args(args):
+    """Normalize provider tool-call arguments to expected dict shape."""
+    import json
 
-    def read_topic_memory(self, topic: str) -> str | None: ...
-    def write_topic_memory(self, topic: str, content: str) -> None: ...
-    def read_topic_history(self, topic: str) -> str: ...
-    def append_topic_history(self, topic: str, entry: str) -> None: ...
-    def get_topic_memory_context(self, topic: str) -> str | None: ...
-    def list_topics(self) -> list[str]: ...
+    if isinstance(args, str):
+        args = json.loads(args)
+    if isinstance(args, list):
+        return args[0] if args and isinstance(args[0], dict) else None
+    return args if isinstance(args, dict) else None
 
-    # -- Topic Mapping --
 
-    def get_topic_mapping(self, chat_id: int, thread_id: int) -> str | None: ...
-    def set_topic_mapping(self, chat_id: int, thread_id: int, topic_name: str) -> None: ...
-    def delete_topic_mapping(self, chat_id: int, thread_id: int) -> None: ...
-    def load_all_topic_mappings(self) -> dict[tuple[int, int], str]: ...
+_TOOL_CHOICE_ERROR_MARKERS = (
+    "tool_choice",
+    "toolchoice",
+    "does not support",
+    'should be ["none", "auto"]',
+)
 
-    # -- Topic Litellm Config --
 
-    def get_topic_litellm(self, topic_name: str) -> tuple[str, float, int] | None: ...
+def _is_tool_choice_unsupported(content: str | None) -> bool:
+    """Detect provider errors caused by forced tool_choice being unsupported."""
+    text = (content or "").lower()
+    return any(m in text for m in _TOOL_CHOICE_ERROR_MARKERS)
+
+
+class MemoryStore:
+    """PostgreSQL memory store: global + per-topic with consolidation."""
+
+    def __init__(self, dsn: str, *, pool_size: int = 5) -> None:
+        self._pool = ConnectionPool(
+            dsn,
+            min_size=1,
+            max_size=pool_size,
+            open=False,
+        )
+        self._pool.open()
+        self._init_tables()
+        self._failures: dict[str, int] = {}
+        logger.info(
+            "MemoryStore connected to {}", dsn.split("@")[-1] if "@" in dsn else dsn
+        )
+
+    def _init_tables(self) -> None:
+        with self._pool.connection() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS global_memory (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS global_history (
+                    id BIGSERIAL PRIMARY KEY,
+                    timestamp TEXT NOT NULL,
+                    entry TEXT NOT NULL
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS topic_memory (
+                    topic TEXT PRIMARY KEY,
+                    memory TEXT NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS topic_history (
+                    id BIGSERIAL PRIMARY KEY,
+                    topic TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    entry TEXT NOT NULL
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS message_reactions (
+                    id BIGSERIAL PRIMARY KEY,
+                    chat_id TEXT NOT NULL,
+                    message_id BIGINT NOT NULL,
+                    emoji TEXT NOT NULL,
+                    sentiment TEXT NOT NULL DEFAULT 'neutral',
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    UNIQUE(chat_id, message_id, emoji)
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_reactions_chat ON message_reactions(chat_id)"
+            )
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS message_sentiment (
+                    chat_id TEXT NOT NULL,
+                    message_id BIGINT NOT NULL,
+                    topic TEXT NOT NULL,
+                    positive_count INTEGER DEFAULT 0,
+                    negative_count INTEGER DEFAULT 0,
+                    neutral_count INTEGER DEFAULT 0,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (chat_id, message_id)
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sentiment_topic ON message_sentiment(topic)"
+            )
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS emoji_sentiment (
+                    emoji TEXT PRIMARY KEY,
+                    sentiment TEXT NOT NULL CHECK(sentiment IN ('positive', 'negative', 'neutral')),
+                    learned_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS topic_mapping (
+                    chat_id BIGINT NOT NULL,
+                    thread_id BIGINT NOT NULL,
+                    topic_name TEXT NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (chat_id, thread_id)
+                )
+            """)
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS topic_litellm ("
+                "  topic_name TEXT PRIMARY KEY,"
+                "  model TEXT NOT NULL,"
+                "  temperature DOUBLE PRECISION NOT NULL,"
+                "  max_tokens INTEGER NOT NULL,"
+                "  updated_at TIMESTAMPTZ DEFAULT now()"
+                ")"
+            )
+
+    def close(self) -> None:
+        self._pool.close()
+
+    # ── Global Memory ────────────────────────────────────────────
+
+    def read_long_term(self) -> str:
+        with self._pool.connection() as conn:
+            row = conn.execute("SELECT value FROM global_memory WHERE key = 'long_term'").fetchone()
+        return row[0] if row else ""
+
+    def write_long_term(self, content: str) -> None:
+        with self._pool.connection() as conn:
+            conn.execute(
+                "INSERT INTO global_memory (key, value, updated_at) VALUES ('long_term', %s, now()) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+                (content,),
+            )
+
+    def read_history(self) -> str:
+        with self._pool.connection() as conn:
+            rows = conn.execute("SELECT entry FROM global_history ORDER BY id").fetchall()
+        return "\n\n".join(r[0] for r in rows)
+
+    def append_history(self, entry: str) -> None:
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+        with self._pool.connection() as conn:
+            conn.execute(
+                "INSERT INTO global_history (timestamp, entry) VALUES (%s, %s)",
+                (ts, entry.rstrip()),
+            )
+
+    def get_memory_context(self) -> str:
+        long_term = self.read_long_term()
+        if not long_term:
+            return ""
+        return f"## Global Memory\n{long_term}"
+
+    # ── Topic Memory ─────────────────────────────────────────────
+
+    def read_topic_memory(self, topic: str) -> str | None:
+        with self._pool.connection() as conn:
+            row = conn.execute(
+                "SELECT memory FROM topic_memory WHERE topic = %s", (topic,)
+            ).fetchone()
+        return row[0] if row else None
+
+    def write_topic_memory(self, topic: str, content: str) -> None:
+        with self._pool.connection() as conn:
+            conn.execute(
+                "INSERT INTO topic_memory (topic, memory, updated_at) VALUES (%s, %s, now()) "
+                "ON CONFLICT(topic) DO UPDATE SET memory=excluded.memory, updated_at=excluded.updated_at",
+                (topic, content),
+            )
+
+    def read_topic_history(self, topic: str) -> str:
+        with self._pool.connection() as conn:
+            rows = conn.execute(
+                "SELECT entry FROM topic_history WHERE topic = %s ORDER BY id", (topic,)
+            ).fetchall()
+        return "\n\n".join(r[0] for r in rows)
+
+    def append_topic_history(self, topic: str, entry: str) -> None:
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+        with self._pool.connection() as conn:
+            conn.execute(
+                "INSERT INTO topic_history (topic, timestamp, entry) VALUES (%s, %s, %s)",
+                (topic, ts, entry.rstrip()),
+            )
+
+    def get_topic_memory_context(self, topic: str) -> str | None:
+        memory = self.read_topic_memory(topic)
+        if not memory:
+            return None
+        return f"## Topic Memory ({topic})\n{memory}"
+
+    def list_topics(self) -> list[str]:
+        with self._pool.connection() as conn:
+            rows = conn.execute("SELECT topic FROM topic_memory ORDER BY topic").fetchall()
+        return [r[0] for r in rows]
+
+    # ── Topic Mapping ────────────────────────────────────────────
+
+    def get_topic_mapping(self, chat_id: int, thread_id: int) -> str | None:
+        with self._pool.connection() as conn:
+            row = conn.execute(
+                "SELECT topic_name FROM topic_mapping WHERE chat_id = %s AND thread_id = %s",
+                (chat_id, thread_id),
+            ).fetchone()
+        return row[0] if row else None
+
+    def set_topic_mapping(self, chat_id: int, thread_id: int, topic_name: str) -> None:
+        with self._pool.connection() as conn:
+            conn.execute(
+                "INSERT INTO topic_mapping (chat_id, thread_id, topic_name, updated_at) "
+                "VALUES (%s, %s, %s, now()) "
+                "ON CONFLICT(chat_id, thread_id) DO UPDATE "
+                "SET topic_name=excluded.topic_name, updated_at=excluded.updated_at",
+                (chat_id, thread_id, topic_name),
+            )
+
+    def delete_topic_mapping(self, chat_id: int, thread_id: int) -> None:
+        with self._pool.connection() as conn:
+            conn.execute(
+                "DELETE FROM topic_mapping WHERE chat_id = %s AND thread_id = %s",
+                (chat_id, thread_id),
+            )
+
+    def load_all_topic_mappings(self) -> dict[tuple[int, int], str]:
+        with self._pool.connection() as conn:
+            rows = conn.execute(
+                "SELECT chat_id, thread_id, topic_name FROM topic_mapping"
+            ).fetchall()
+        return {(r[0], r[1]): r[2] for r in rows}
+
+    # ── Topic Litellm Config ────────────────────────────────────
+
+    def get_topic_litellm(self, topic_name: str) -> tuple[str, float, int] | None:
+        with self._pool.connection() as conn:
+            row = conn.execute(
+                "SELECT model, temperature, max_tokens FROM topic_litellm WHERE topic_name = %s",
+                (topic_name,),
+            ).fetchone()
+        return tuple(row) if row else None
 
     def set_topic_litellm(
         self, topic_name: str, model: str, temperature: float, max_tokens: int
-    ) -> None: ...
+    ) -> None:
+        with self._pool.connection() as conn:
+            conn.execute(
+                "INSERT INTO topic_litellm (topic_name, model, temperature, max_tokens, updated_at) "
+                "VALUES (%s, %s, %s, %s, now()) "
+                "ON CONFLICT(topic_name) DO UPDATE "
+                "SET model=excluded.model, temperature=excluded.temperature, "
+                "max_tokens=excluded.max_tokens, updated_at=excluded.updated_at",
+                (topic_name, model, temperature, max_tokens),
+            )
 
-    def delete_topic_litellm(self, topic_name: str) -> None: ...
+    def delete_topic_litellm(self, topic_name: str) -> None:
+        with self._pool.connection() as conn:
+            conn.execute("DELETE FROM topic_litellm WHERE topic_name = %s", (topic_name,))
 
-    # -- Reactions & Sentiment --
+    def _list_topic_litellm(self) -> list[tuple[str, str, float, int]]:
+        with self._pool.connection() as conn:
+            rows = conn.execute(
+                "SELECT topic_name, model, temperature, max_tokens FROM topic_litellm"
+            ).fetchall()
+        return [(r[0], r[1], r[2], r[3]) for r in rows]
+
+    def sync_topic_files(self, workspace: Path) -> None:
+        """Regenerate all TOPIC.md files from topic_mapping (DB is source of truth).
+
+        Folder structure: topics/<chat_id>/<thread_id>/TOPIC.md
+        - Source of truth: topic_mapping(chat_id, thread_id) -> topic_name
+        - Litellm config: topic_litellm(topic_name) (shared across threads with same topic)
+        - Purpose: topic_memory(topic_name)
+        - Orphan dirs (chat_id/thread_id not in topic_mapping) -> deleted
+        """
+        import shutil
+
+        topics_dir = workspace / "topics"
+        topics_dir.mkdir(parents=True, exist_ok=True)
+
+        # Load all chat_id/thread_id -> topic_name mappings
+        mappings = self.load_all_topic_mappings()
+        valid_paths: set[tuple[int, int]] = set(mappings.keys())
+
+        # Delete orphan chat_id dirs
+        for chat_dir in topics_dir.iterdir():
+            if not chat_dir.is_dir():
+                continue
+            # Detect orphan: top-level chat dir not in any mapping
+            try:
+                chat_id = int(chat_dir.name)
+            except ValueError:
+                # Not a numeric chat_id dir, skip
+                continue
+
+            for thread_dir in chat_dir.iterdir():
+                if not thread_dir.is_dir():
+                    continue
+                try:
+                    thread_id = int(thread_dir.name)
+                except ValueError:
+                    continue
+
+                if (chat_id, thread_id) not in valid_paths:
+                    shutil.rmtree(thread_dir)
+                    logger.info(
+                        "sync_topic_files: removed orphan thread dir {}/{}",
+                        chat_id,
+                        thread_id,
+                    )
+
+            # Delete empty chat dirs after orphan thread cleanup
+            if not any(chat_dir.iterdir()):
+                shutil.rmtree(chat_dir)
+                logger.info("sync_topic_files: removed empty chat dir {}", chat_id)
+
+        # Sync topics from DB -> create or update files
+        for (chat_id, thread_id), topic_name in mappings.items():
+            chat_dir = topics_dir / str(chat_id)
+            chat_dir.mkdir(parents=True, exist_ok=True)
+            thread_dir = chat_dir / str(thread_id)
+            thread_dir.mkdir(parents=True, exist_ok=True)
+
+            litellm_config = self.get_topic_litellm(topic_name)
+            if litellm_config:
+                model, temp, tokens = litellm_config
+            else:
+                model, temp, tokens = "", None, None
+
+            topic_file = thread_dir / "TOPIC.md"
+            purpose = self.read_topic_memory(topic_name) or ""
+            purpose_section = f"## purpose\n{purpose.strip()}\n\n" if purpose.strip() else ""
+
+            topic_file.write_text(
+                f"# Topic: {topic_name}\n\n{purpose_section}## litellm\n"
+                f"model: {model}\ntemperature: {temp}\nmax_tokens: {tokens}\n",
+                encoding="utf-8",
+            )
+
+    # ── Reactions & Sentiment ────────────────────────────────────
 
     def record_reaction(
         self, chat_id: str, message_id: int, emoji: str, sentiment: str, topic: str
-    ) -> None: ...
-    def remove_reaction(self, chat_id: str, message_id: int, emoji: str) -> None: ...
-    def get_message_sentiment(self, chat_id: str, message_id: int) -> dict[str, int]: ...
-    def get_high_value_messages(self, topic: str) -> list[int]: ...
-    def resolve_emoji_sentiment(self, emoji: str) -> str | None: ...
-    def is_emoji_known(self, emoji: str) -> bool: ...
-    def learn_emoji(self, emoji: str, sentiment: str) -> None: ...
-    def cleanup_old_reactions(self, max_age_days: int = 30) -> int: ...
+    ) -> None:
+        with self._pool.connection() as conn:
+            conn.execute(
+                "INSERT INTO message_reactions (chat_id, message_id, emoji, sentiment) "
+                "VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
+                (chat_id, message_id, emoji, sentiment),
+            )
+            count_col = f"{sentiment}_count"
+            conn.execute(
+                f"INSERT INTO message_sentiment (chat_id, message_id, topic, {count_col}) "
+                f"VALUES (%s, %s, %s, 1) "
+                f"ON CONFLICT(chat_id, message_id) DO UPDATE "
+                f"SET {count_col} = message_sentiment.{count_col} + 1, "
+                f"updated_at = now()",
+                (chat_id, message_id, topic),
+            )
 
+    def remove_reaction(self, chat_id: str, message_id: int, emoji: str) -> None:
+        with self._pool.connection() as conn:
+            row = conn.execute(
+                "SELECT sentiment FROM message_reactions "
+                "WHERE chat_id = %s AND message_id = %s AND emoji = %s",
+                (chat_id, message_id, emoji),
+            ).fetchone()
+            if row:
+                sentiment = row[0]
+                count_col = f"{sentiment}_count"
+                conn.execute(
+                    "DELETE FROM message_reactions "
+                    "WHERE chat_id = %s AND message_id = %s AND emoji = %s",
+                    (chat_id, message_id, emoji),
+                )
+                conn.execute(
+                    f"UPDATE message_sentiment SET {count_col} = GREATEST({count_col} - 1, 0) "
+                    f"WHERE chat_id = %s AND message_id = %s",
+                    (chat_id, message_id),
+                )
 
-def create_memory_store(config: object, workspace: Path) -> MemoryStoreProtocol:
-    """Create a memory store based on config.database.backend.
+    def get_message_sentiment(self, chat_id: str, message_id: int) -> dict[str, int]:
+        with self._pool.connection() as conn:
+            row = conn.execute(
+                "SELECT positive_count, negative_count, neutral_count "
+                "FROM message_sentiment WHERE chat_id = %s AND message_id = %s",
+                (chat_id, message_id),
+            ).fetchone()
+        if row:
+            return {"positive_count": row[0], "negative_count": row[1], "neutral_count": row[2]}
+        return {"positive_count": 0, "negative_count": 0, "neutral_count": 0}
 
-    Args:
-        config: Config object with config.database.backend and config.database.url.
-        workspace: Path to the nanobot workspace directory.
-    """
-    db_config = getattr(config, "database", None)
-    backend = getattr(db_config, "backend", "sqlite") if db_config else "sqlite"
+    def get_high_value_messages(self, topic: str) -> list[int]:
+        with self._pool.connection() as conn:
+            rows = conn.execute(
+                "SELECT message_id FROM message_sentiment WHERE topic = %s AND positive_count >= 1",
+                (topic,),
+            ).fetchall()
+        return [r[0] for r in rows]
 
-    if backend == "postgres":
-        from nanobot.agent.store_postgres import PostgresMemoryStore
+    def resolve_emoji_sentiment(self, emoji: str) -> str | None:
+        if emoji in _POSITIVE_EMOJI:
+            return "positive"
+        if emoji in _NEGATIVE_EMOJI:
+            return "negative"
+        with self._pool.connection() as conn:
+            row = conn.execute(
+                "SELECT sentiment FROM emoji_sentiment WHERE emoji = %s", (emoji,)
+            ).fetchone()
+        return row[0] if row else None
 
-        url = getattr(db_config, "url", "")
-        pool_size = getattr(db_config, "pool_size", 5)
-        if not url:
-            raise ValueError("database.url is required when backend is 'postgres'")
-        return PostgresMemoryStore(url, pool_size=pool_size)
+    def is_emoji_known(self, emoji: str) -> bool:
+        if emoji in _POSITIVE_EMOJI or emoji in _NEGATIVE_EMOJI:
+            return True
+        with self._pool.connection() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM emoji_sentiment WHERE emoji = %s", (emoji,)
+            ).fetchone()
+        return row is not None
 
-    from nanobot.agent.store_sqlite import SqliteMemoryStore
+    def learn_emoji(self, emoji: str, sentiment: str) -> None:
+        with self._pool.connection() as conn:
+            conn.execute(
+                "INSERT INTO emoji_sentiment (emoji, sentiment) VALUES (%s, %s) "
+                "ON CONFLICT(emoji) DO UPDATE SET sentiment=excluded.sentiment, learned_at=now()",
+                (emoji, sentiment),
+            )
 
-    return SqliteMemoryStore(workspace)
+    def cleanup_old_reactions(self, max_age_days: int = 30) -> int:
+        with self._pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM message_reactions WHERE created_at < now() - interval '%s days'",
+                    (max_age_days,),
+                )
+                return cur.rowcount
+
+    # ── Consolidation ────────────────────────────────────────────
+
+    _MAX_FAILURES = 3
+
+    def _failure_key(self, topic: str | None) -> str:
+        return topic if topic else "global"
+
+    def format_messages_for_consolidation(self, messages: list[dict], topic: str | None) -> str:
+        """Format messages, prefixing high-value ones with [HIGH VALUE]."""
+        high_value_ids: set[int] = set()
+        if topic:
+            high_value_ids = set(self.get_high_value_messages(topic))
+
+        lines = []
+        for msg in messages:
+            if not msg.get("content"):
+                continue
+            tools = f" [tools: {', '.join(msg['tools_used'])}]" if msg.get("tools_used") else ""
+            prefix = "[HIGH VALUE] " if msg.get("telegram_message_id") in high_value_ids else ""
+            lines.append(
+                f"[{msg.get('timestamp', '?')[:16]}] {msg['role'].upper()}{tools}: {prefix}{msg['content']}"
+            )
+        return "\n".join(lines)
+
+    async def consolidate(self, messages: list[dict], provider, model: str) -> bool:
+        return await self._do_consolidate(None, messages, provider, model)
+
+    async def consolidate_topic(
+        self, topic: str, messages: list[dict], provider, model: str
+    ) -> bool:
+        return await self._do_consolidate(topic, messages, provider, model)
+
+    async def _do_consolidate(
+        self, topic: str | None, messages: list[dict], provider, model: str
+    ) -> bool:
+        if not messages:
+            return True
+
+        high_value_ids = set(self.get_high_value_messages(topic)) if topic else set()
+        high_count = sum(1 for m in messages if m.get("telegram_message_id") in high_value_ids)
+        logger.debug(
+            "CONSOLIDATION: topic={} high_value={} total={} messages",
+            topic,
+            high_count,
+            len(messages),
+        )
+
+        current = self.read_topic_memory(topic) if topic else self.read_long_term()
+        formatted = self.format_messages_for_consolidation(messages, topic)
+        prompt = f"""Process this conversation and call `save_memory` tool with your consolidation.
+
+## Current {"Topic" if topic else "Long-term"} Memory
+{current or "(empty)"}
+
+## Conversation to Process
+{formatted}
+
+Prioritize preserving insights from [HIGH VALUE] messages — user confirmed these are valuable."""
+
+        chat_messages = [
+            {
+                "role": "system",
+                "content": "You are a memory consolidation agent. Call `save_memory` tool.",
+            },
+            {"role": "user", "content": prompt},
+        ]
+
+        try:
+            forced = {"type": "function", "function": {"name": "save_memory"}}
+            response = await provider.chat_with_retry(
+                messages=chat_messages,
+                tools=_SAVE_MEMORY_TOOL,
+                model=model,
+                tool_choice=forced,
+            )
+
+            if response.finish_reason == "error" and _is_tool_choice_unsupported(response.content):
+                response = await provider.chat_with_retry(
+                    messages=chat_messages,
+                    tools=_SAVE_MEMORY_TOOL,
+                    model=model,
+                    tool_choice="auto",
+                )
+
+            if not response.has_tool_calls:
+                return self._fail_or_raw_archive(topic, messages)
+
+            args = _normalize_save_memory_args(response.tool_calls[0].arguments)
+            if not args or "history_entry" not in args or "memory_update" not in args:
+                return self._fail_or_raw_archive(topic, messages)
+
+            entry = _ensure_text(args["history_entry"]).strip()
+            update = _ensure_text(args["memory_update"])
+
+            if not entry or args["history_entry"] is None or args["memory_update"] is None:
+                return self._fail_or_raw_archive(topic, messages)
+
+            if topic:
+                self.append_topic_history(topic, entry)
+                if update != current:
+                    self.write_topic_memory(topic, update)
+            else:
+                self.append_history(entry)
+                if update != current:
+                    self.write_long_term(update)
+
+            self._failures[self._failure_key(topic)] = 0
+            return True
+        except Exception:
+            logger.exception("Memory consolidation failed")
+            return self._fail_or_raw_archive(topic, messages)
+
+    def _fail_or_raw_archive(self, topic: str | None, messages: list[dict]) -> bool:
+        key = self._failure_key(topic)
+        self._failures[key] = self._failures.get(key, 0) + 1
+        if self._failures[key] < self._MAX_FAILURES:
+            return False
+        self._raw_archive(topic, messages)
+        self._failures[key] = 0
+        return True
+
+    @staticmethod
+    def _format_raw_messages(messages: list[dict]) -> str:
+        lines = []
+        for msg in messages:
+            if not msg.get("content"):
+                continue
+            lines.append(
+                f"[{msg.get('timestamp', '?')[:16]}] {msg['role'].upper()}: {msg['content']}"
+            )
+        return "\n".join(lines)
+
+    def _raw_archive(self, topic: str | None, messages: list[dict]) -> None:
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+        raw = f"[{ts}] [RAW] {len(messages)} messages\n{self._format_raw_messages(messages)}"
+        if topic:
+            self.append_topic_history(topic, raw)
+        else:
+            self.append_history(raw)
+        logger.warning("Raw-archived {} messages for {}", len(messages), topic or "global")

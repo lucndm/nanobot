@@ -1,4 +1,4 @@
-"""Tests for PostgresMemoryStore.
+"""Tests for MemoryStore.
 
 Requires a running Postgres instance. Set NANOBOT_TEST_PG_URL env var to enable.
 Example: NANOBOT_TEST_PG_URL=postgresql://test:test@localhost:5432/test_nanobot
@@ -16,9 +16,9 @@ pytestmark = pytest.mark.skipif(not pg_url, reason="NANOBOT_TEST_PG_URL not set"
 
 @pytest.fixture
 def store():
-    from nanobot.agent.store_postgres import PostgresMemoryStore
+    from nanobot.agent.store import MemoryStore
 
-    s = PostgresMemoryStore(pg_url, pool_size=2)
+    s = MemoryStore(pg_url, pool_size=2)
     yield s
     # Cleanup: truncate all tables
     with s._pool.connection() as conn:
@@ -31,7 +31,7 @@ def store():
     s.close()
 
 
-class TestPostgresGlobalMemory:
+class TestGlobalMemory:
     def test_read_long_term_empty(self, store):
         assert store.read_long_term() == ""
 
@@ -58,7 +58,7 @@ class TestPostgresGlobalMemory:
         assert store.get_memory_context() == ""
 
 
-class TestPostgresTopicMemory:
+class TestTopicMemory:
     def test_read_missing(self, store):
         assert store.read_topic_memory("nope") is None
 
@@ -85,7 +85,7 @@ class TestPostgresTopicMemory:
         assert store.get_topic_memory_context("nope") is None
 
 
-class TestPostgresTopicMapping:
+class TestTopicMapping:
     def test_get_missing(self, store):
         assert store.get_topic_mapping(-100, 4) is None
 
@@ -111,7 +111,7 @@ class TestPostgresTopicMapping:
         assert m[(-100, 6)] == "General"
 
 
-class TestPostgresReactions:
+class TestReactions:
     def test_record_and_get(self, store):
         store.record_reaction("-100", 123, "👍", "positive", "telegram:-100:topic:4")
         counts = store.get_message_sentiment("-100", 123)
@@ -136,8 +136,16 @@ class TestPostgresReactions:
         assert 10 in hv and 20 in hv and 30 not in hv
 
 
-def test_postgres_store_satisfies_protocol(store):
-    """Verify PostgresMemoryStore satisfies MemoryStoreProtocol."""
-    from nanobot.agent.store import MemoryStoreProtocol
+class TestTopicLitellm:
+    def test_get_missing(self, store):
+        assert store.get_topic_litellm("nope") is None
 
-    assert isinstance(store, MemoryStoreProtocol)
+    def test_set_and_get(self, store):
+        store.set_topic_litellm("finance", "gpt-4", 0.7, 1000)
+        cfg = store.get_topic_litellm("finance")
+        assert cfg == ("gpt-4", 0.7, 1000)
+
+    def test_delete(self, store):
+        store.set_topic_litellm("finance", "gpt-4", 0.7, 1000)
+        store.delete_topic_litellm("finance")
+        assert store.get_topic_litellm("finance") is None
