@@ -283,20 +283,39 @@ class SqliteMemoryStore:
         return [(r[0], r[1], r[2], r[3]) for r in rows]
 
     def sync_topic_files(self, workspace: Path) -> None:
-        """Regenerate all TOPIC.md files from PostgreSQL (DB is source of truth).
+        """Regenerate all TOPIC.md files from DB and clean up orphan topic dirs.
 
-        This is a one-way sync: DB -> File. The file is always regenerated from DB,
-        never read back to update DB.
+        DB is source of truth:
+        - Topics in DB  -> create/update TOPIC.md from DB content
+        - Topics on disk but NOT in DB -> delete orphan topic directory
         """
+        import shutil
+
         topics_dir = workspace / "topics"
         topics_dir.mkdir(parents=True, exist_ok=True)
 
-        for topic_name, model, temp, tokens in self._list_topic_litellm():
+        db_topics = {row[0] for row in self._list_topic_litellm()}
+
+        # Delete orphan dirs (on disk but not in DB)
+        for topic_dir in topics_dir.iterdir():
+            if not topic_dir.is_dir():
+                continue
+            if topic_dir.name not in db_topics:
+                shutil.rmtree(topic_dir)
+                logger.info("sync_topic_files: removed orphan topic dir '{}'", topic_dir.name)
+
+        # Sync topics from DB -> create or update files
+        for topic_name in db_topics:
             topic_dir = topics_dir / topic_name
             topic_dir.mkdir(parents=True, exist_ok=True)
-            topic_file = topic_dir / "TOPIC.md"
 
-            # Read purpose from topic_memory (if any)
+            litellm_config = self.get_topic_litellm(topic_name)
+            if litellm_config:
+                model, temp, tokens = litellm_config
+            else:
+                model, temp, tokens = "", None, None
+
+            topic_file = topic_dir / "TOPIC.md"
             purpose = self.read_topic_memory(topic_name) or ""
             purpose_section = f"## purpose\n{purpose.strip()}\n\n" if purpose.strip() else ""
 

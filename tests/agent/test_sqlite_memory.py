@@ -257,20 +257,21 @@ class TestTopicLitellmSync:
         content = topic_file.read_text()
         assert "test/model" in content
 
-    def test_sync_does_not_import_orphan_topic_files(self, tmp_path: Path):
-        """Orphan topic files (no DB entry) are NOT imported -- DB is source of truth."""
+    def test_sync_deletes_orphan_topic_dirs(self, tmp_path: Path):
+        """Orphan topic dirs (on disk but not in DB) are DELETED -- DB is source of truth."""
         from nanobot.agent.store_sqlite import SqliteMemoryStore
         store = SqliteMemoryStore(tmp_path)
 
-        # Create an orphan topic file (exists in filesystem but not in DB)
+        # Create an orphan topic dir (exists on disk but not in DB)
         topic_dir = tmp_path / "topics" / "orphan-topic"
         topic_dir.mkdir(parents=True)
         (topic_dir / "TOPIC.md").write_text(
             "# Topic: orphan-topic\n\n## litellm\nmodel: orphan/model\ntemperature: 0.5\nmax_tokens: 2048\n"
         )
+        assert topic_dir.exists()
 
         store.sync_topic_files(tmp_path)
 
-        # Orphan file should NOT be imported to DB
-        result = store.get_topic_litellm("orphan-topic")
-        assert result is None
+        # Orphan dir must be deleted from disk
+        assert not topic_dir.exists()
+        assert store.get_topic_litellm("orphan-topic") is None
