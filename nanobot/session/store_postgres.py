@@ -150,6 +150,19 @@ class PostgresSessionStore:
             if not new_msgs:
                 return
 
+            # Ensure system_prompt_hash values exist in system_prompts table
+            # before inserting turn_log rows that reference them (FK constraint)
+            hashes_seen: set[str] = set()
+            for msg in new_msgs:
+                h = msg.get("system_prompt_hash")
+                if h and h not in hashes_seen:
+                    hashes_seen.add(h)
+                    conn.execute(
+                        "INSERT INTO system_prompts (hash, content) VALUES (%s, %s) "
+                        "ON CONFLICT (hash) DO NOTHING",
+                        (h, ""),  # content placeholder — actual content is in context builder
+                    )
+
             for i, msg in enumerate(new_msgs):
                 seq = existing + i
                 extra = _extract_extra(msg)
