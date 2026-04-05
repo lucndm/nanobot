@@ -154,8 +154,6 @@ def test_onboard_uses_explicit_config_and_workspace_paths(tmp_path, monkeypatch)
     config_path = tmp_path / "instance" / "config.json"
     workspace_path = tmp_path / "workspace"
 
-    monkeypatch.setattr("nanobot.channels.registry.discover_all", lambda: {})
-
     result = runner.invoke(
         app,
         ["onboard", "--config", str(config_path), "--workspace", str(workspace_path)],
@@ -182,7 +180,6 @@ def test_onboard_wizard_preserves_explicit_config_in_next_steps(tmp_path, monkey
         "nanobot.cli.onboard.run_onboard",
         lambda initial_config: OnboardResult(config=initial_config, should_save=True),
     )
-    monkeypatch.setattr("nanobot.channels.registry.discover_all", lambda: {})
 
     result = runner.invoke(
         app,
@@ -228,7 +225,7 @@ def mock_agent_runtime(tmp_path):
          patch("nanobot.agent.loop.AgentLoop") as mock_agent_loop_cls:
 
         agent_loop = MagicMock()
-        agent_loop.channels_config = None
+        agent_loop.channel_config = None
         agent_loop.process_direct = AsyncMock(
             return_value=OutboundMessage(channel="cli", chat_id="direct", content="mock-response"),
         )
@@ -826,7 +823,10 @@ def test_gateway_cli_port_overrides_configured_port(monkeypatch, tmp_path: Path)
     assert "port 18792" in result.stdout
 
 
-def test_channels_login_requires_channel_name() -> None:
+def test_channels_login_defaults_to_telegram() -> None:
+    """channels login without args defaults to telegram."""
     result = runner.invoke(app, ["channels", "login"])
 
-    assert result.exit_code == 2
+    # Does not crash — telegram is the default and only supported channel
+    # May fail at actual login (no config), but should not be a missing-arg error
+    assert result.exit_code != 2

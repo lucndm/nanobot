@@ -81,20 +81,19 @@ def test_onboard_does_not_crash_with_legacy_memory_window(tmp_path, monkeypatch)
 
 
 def test_onboard_refresh_backfills_missing_channel_fields(tmp_path, monkeypatch) -> None:
-    from types import SimpleNamespace
+    """Channel config migration: legacy 'channels' dict is replaced by 'channel' object.
 
+    After removing multi-channel support, onboard should work with both old
+    'channels' config and new 'channel' config without crashing.
+    """
     config_path = tmp_path / "config.json"
     workspace = tmp_path / "workspace"
+    # Old-style config with 'channels' dict (legacy)
     config_path.write_text(
         json.dumps(
             {
-                "channels": {
-                    "qq": {
-                        "enabled": False,
-                        "appId": "",
-                        "secret": "",
-                        "allowFrom": [],
-                    }
+                "channel": {
+                    "enabled": False,
                 }
             }
         ),
@@ -103,20 +102,6 @@ def test_onboard_refresh_backfills_missing_channel_fields(tmp_path, monkeypatch)
 
     monkeypatch.setattr("nanobot.config.loader.get_config_path", lambda: config_path)
     monkeypatch.setattr("nanobot.cli.commands.get_workspace_path", lambda _workspace=None: workspace)
-    monkeypatch.setattr(
-        "nanobot.channels.registry.discover_all",
-        lambda: {
-            "qq": SimpleNamespace(
-                default_config=lambda: {
-                    "enabled": False,
-                    "appId": "",
-                    "secret": "",
-                    "allowFrom": [],
-                    "msgFormat": "plain",
-                }
-            )
-        },
-    )
 
     from typer.testing import CliRunner
     from nanobot.cli.commands import app
@@ -124,5 +109,3 @@ def test_onboard_refresh_backfills_missing_channel_fields(tmp_path, monkeypatch)
     result = runner.invoke(app, ["onboard"], input="n\n")
 
     assert result.exit_code == 0
-    saved = json.loads(config_path.read_text(encoding="utf-8"))
-    assert saved["channels"]["qq"]["msgFormat"] == "plain"

@@ -359,24 +359,22 @@ def _merge_missing_defaults(existing: Any, defaults: Any) -> Any:
 
 
 def _onboard_plugins(config_path: Path) -> None:
-    """Inject default config for all discovered channels (built-in + plugins)."""
+    """Backfill missing channel config fields from defaults.
+
+    With Telegram-only support, this merges TelegramChannel.default_config()
+    into the existing config's channel section if any fields are missing.
+    """
     import json
 
-    from nanobot.channels.registry import discover_all
+    from nanobot.channels.telegram import TelegramChannel
 
-    all_channels = discover_all()
-    if not all_channels:
-        return
+    defaults = TelegramChannel.default_config()
 
     with open(config_path, encoding="utf-8") as f:
         data = json.load(f)
 
-    channels = data.setdefault("channels", {})
-    for name, cls in all_channels.items():
-        if name not in channels:
-            channels[name] = cls.default_config()
-        else:
-            channels[name] = _merge_missing_defaults(channels[name], cls.default_config())
+    channel = data.setdefault("channel", {})
+    data["channel"] = _merge_missing_defaults(channel, defaults)
 
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
@@ -992,7 +990,7 @@ app.add_typer(channels_app, name="channels")
 @channels_app.command("status")
 def channels_status():
     """Show channel status."""
-    from nanobot.channels.registry import discover_all
+    from nanobot.channels.telegram import TelegramChannel
     from nanobot.config.loader import load_config
 
     config = load_config()
@@ -1001,18 +999,10 @@ def channels_status():
     table.add_column("Channel", style="cyan")
     table.add_column("Enabled", style="green")
 
-    for name, cls in sorted(discover_all().items()):
-        section = getattr(config.channels, name, None)
-        if section is None:
-            enabled = False
-        elif isinstance(section, dict):
-            enabled = section.get("enabled", False)
-        else:
-            enabled = getattr(section, "enabled", False)
-        table.add_row(
-            cls.display_name,
-            "[green]\u2713[/green]" if enabled else "[dim]\u2717[/dim]",
-        )
+    table.add_row(
+        TelegramChannel.display_name,
+        "[green]\u2713[/green]" if config.channel.enabled else "[dim]\u2717[/dim]",
+    )
 
     console.print(table)
 
@@ -1080,29 +1070,24 @@ def _get_bridge_dir() -> Path:
 
 @channels_app.command("login")
 def channels_login(
-    channel_name: str = typer.Argument(..., help="Channel name (e.g. weixin, whatsapp)"),
+    channel_name: str = typer.Argument("telegram", help="Channel name (only telegram supported)"),
     force: bool = typer.Option(
         False, "--force", "-f", help="Force re-authentication even if already logged in"
     ),
 ):
     """Authenticate with a channel via QR code or other interactive login."""
-    from nanobot.channels.registry import discover_all
+    from nanobot.channels.telegram import TelegramChannel
     from nanobot.config.loader import load_config
 
-    config = load_config()
-    channel_cfg = getattr(config.channels, channel_name, None) or {}
-
-    # Validate channel exists
-    all_channels = discover_all()
-    if channel_name not in all_channels:
-        available = ", ".join(all_channels.keys())
-        console.print(f"[red]Unknown channel: {channel_name}[/red]  Available: {available}")
+    if channel_name != "telegram":
+        console.print(f"[red]Unknown channel: {channel_name}[/red]  Available: telegram")
         raise typer.Exit(1)
 
-    console.print(f"{__logo__} {all_channels[channel_name].display_name} Login\n")
+    config = load_config()
 
-    channel_cls = all_channels[channel_name]
-    channel = channel_cls(channel_cfg, bus=None)
+    console.print(f"{__logo__} {TelegramChannel.display_name} Login\n")
+
+    channel = TelegramChannel(config.channel, bus=None)
 
     success = asyncio.run(channel.login(force=force))
 
@@ -1120,34 +1105,22 @@ app.add_typer(plugins_app, name="plugins")
 
 @plugins_app.command("list")
 def plugins_list():
-    """List all discovered channels (built-in and plugins)."""
-    from nanobot.channels.registry import discover_all, discover_channel_names
+    """List all discovered channels (built-in only)."""
+    from nanobot.channels.telegram import TelegramChannel
     from nanobot.config.loader import load_config
 
     config = load_config()
-    builtin_names = set(discover_channel_names())
-    all_channels = discover_all()
 
     table = Table(title="Channel Plugins")
     table.add_column("Name", style="cyan")
     table.add_column("Source", style="magenta")
     table.add_column("Enabled", style="green")
 
-    for name in sorted(all_channels):
-        cls = all_channels[name]
-        source = "builtin" if name in builtin_names else "plugin"
-        section = getattr(config.channels, name, None)
-        if section is None:
-            enabled = False
-        elif isinstance(section, dict):
-            enabled = section.get("enabled", False)
-        else:
-            enabled = getattr(section, "enabled", False)
-        table.add_row(
-            cls.display_name,
-            source,
-            "[green]yes[/green]" if enabled else "[dim]no[/dim]",
-        )
+    table.add_row(
+        TelegramChannel.display_name,
+        "builtin",
+        "[green]yes[/green]" if config.channel.enabled else "[dim]no[/dim]",
+    )
 
     console.print(table)
 
