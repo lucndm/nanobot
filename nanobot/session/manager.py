@@ -10,7 +10,7 @@ from typing import Any
 from opentelemetry.metrics import Observation
 
 from nanobot.observability.otel import get_meter
-from nanobot.session.store import SessionStoreProtocol
+from nanobot.session.store import SessionStore
 
 
 @dataclass
@@ -159,17 +159,11 @@ class SessionManager:
     """
     Manages conversation sessions.
 
-    Delegates persistence to a SessionStoreProtocol backend (JSONL or PostgreSQL).
-    Accepts either a store instance or a workspace Path (backward compatible).
+    Delegates persistence to SessionStore backend.
     """
 
-    def __init__(self, store_or_workspace: SessionStoreProtocol | Path):
-        if isinstance(store_or_workspace, Path):
-            from nanobot.session.store_jsonl import JsonlSessionStore
-
-            self._store: SessionStoreProtocol = JsonlSessionStore(store_or_workspace)
-        else:
-            self._store = store_or_workspace
+    def __init__(self, store: SessionStore):
+        self._store: SessionStore = store
         self._cache: dict[str, Session] = {}
 
         meter = get_meter()
