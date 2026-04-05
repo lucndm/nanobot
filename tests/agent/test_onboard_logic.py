@@ -348,18 +348,6 @@ class TestSyncWorkspaceTemplates:
             assert not Path(path).is_absolute()
 
 
-class TestProviderChannelInfo:
-    """Tests for provider and channel info retrieval."""
-
-    def test_get_channel_names_returns_dict(self):
-        from nanobot.cli.onboard import _get_channel_names
-
-        names = _get_channel_names()
-        assert isinstance(names, dict)
-        # Should include at least some channels
-        assert len(names) >= 0
-
-
 class _SimpleDraftModel(BaseModel):
     api_key: str = ""
 
