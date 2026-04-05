@@ -199,40 +199,45 @@ def render_table_pillow(table_text: str) -> bytes | None:
 def render_ascii_art_pillow(text: str) -> bytes:
     """Render ASCII art (box-drawing) to PNG using Pillow.
 
+    Uses 2x supersampling for crisp rendering, then downscales.
     Returns PNG bytes. Returns empty bytes for empty/whitespace-only input.
     """
     if not text or not text.strip():
         return b""
 
     lines = text.split("\n")
+    font_size = 16
+    scale = 2  # Render at 2x for supersampling
+    pad = 16
 
-    font = _get_monospace_font(size=12)
+    font = _get_monospace_font(size=font_size * scale)
 
-    line_height = 16
-    cell_padding_x = 8
-    cell_padding_y = 8
+    # Measure actual line widths using font
+    line_widths = []
+    for line in lines:
+        try:
+            bbox = font.getbbox(line)
+            line_widths.append(bbox[2] - bbox[0])
+        except (AttributeError, TypeError):
+            line_widths.append(len(line) * font_size * scale)
 
-    max_line_len = max(len(line) for line in lines) if lines else 1
+    max_width = max(line_widths) if line_widths else 100
+    line_height = font_size * scale + 6 * scale  # font height + line spacing
+    img_width = max_width + pad * scale * 2
+    img_height = len(lines) * line_height + pad * scale * 2
 
-    try:
-        char_width = font.getlength("M")
-    except (AttributeError, TypeError):
-        char_width = font.size * 0.6
-
-    img_width = int(max_line_len * char_width) + cell_padding_x * 2
-    img_height = len(lines) * line_height + cell_padding_y * 2
-
-    img_width = max(img_width, 100)
-    img_height = max(img_height, 50)
-
+    # Render at 2x
     img = Image.new("RGB", (img_width, img_height), _ASCII_BG)
     draw = ImageDraw.Draw(img)
 
-    y = cell_padding_y
+    y = pad * scale
     for line in lines:
-        draw.text((cell_padding_x, y), line, fill=_ASCII_FG, font=font)
+        draw.text((pad * scale, y), line, fill=_ASCII_FG, font=font)
         y += line_height
 
+    # Downscale with anti-aliasing
+    final = img.resize((img_width // scale, img_height // scale), Image.LANCZOS)
+
     buf = io.BytesIO()
-    img.save(buf, format="PNG")
+    final.save(buf, format="PNG")
     return buf.getvalue()
