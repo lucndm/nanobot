@@ -184,6 +184,8 @@ class _StreamBuf:
 class TelegramConfig(Base):
     """Telegram channel configuration."""
 
+    model_config = ConfigDict(extra="ignore")
+
     enabled: bool = False
     token: str = ""
     allow_from: list[str] = Field(default_factory=list)

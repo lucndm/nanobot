@@ -21,7 +21,12 @@ class ChannelConfig(Base):
     enabled: bool = False
     token: str = ""
     allow_from: list[str] = Field(default=["*"], alias="allowFrom")
+    proxy: str | None = None
+    reply_to_message: bool = False
+    react_emoji: str = "👀"
     group_policy: str = Field(default="mention", alias="groupPolicy")
+    connection_pool_size: int = 32
+    pool_timeout: float = 5.0
     streaming: bool = True
     send_progress: bool = True
     send_tool_hints: bool = False
