@@ -1,5 +1,3 @@
-import asyncio
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -15,8 +13,13 @@ except ImportError:
 
 from nanobot.bus.events import OutboundMessage
 from nanobot.bus.queue import MessageBus
-from nanobot.channels.telegram import TELEGRAM_REPLY_CONTEXT_MAX_LEN, TelegramChannel, _StreamBuf
-from nanobot.channels.telegram import TelegramConfig
+from nanobot.channels.manager import ChannelManager
+from nanobot.channels.telegram import (
+    TELEGRAM_REPLY_CONTEXT_MAX_LEN,
+    TelegramChannel,
+    TelegramConfig,
+    _StreamBuf,
+)
 
 
 class _FakeHTTPXRequest:
@@ -333,7 +336,7 @@ async def test_on_error_keeps_non_network_exceptions_as_error(monkeypatch) -> No
 
 
 @pytest.mark.asyncio
-async def test_send_delta_stream_end_raises_and_keeps_buffer_on_failure() -> None:
+async def test_send_delta_stream_end_raises_and_cleans_buffer_on_failure() -> None:
     channel = TelegramChannel(
         TelegramConfig(enabled=True, token="123:abc", allow_from=["*"]),
         MessageBus(),
@@ -345,7 +348,7 @@ async def test_send_delta_stream_end_raises_and_keeps_buffer_on_failure() -> Non
     with pytest.raises(RuntimeError, match="boom"):
         await channel.send_delta("123", "", {"_stream_end": True})
 
-    assert "123" in channel._stream_bufs
+    assert "123" not in channel._stream_bufs
 
 
 @pytest.mark.asyncio
@@ -1086,3 +1089,116 @@ class TestTopicResolution:
         assert ch._topic_store.get_topic_mapping(-1003738155502, 99) == "Ideas"
         # Placeholder should be gone
         assert ch._topic_store.get_topic_mapping(0, 99) is None
+
+
+# --- RetryAfter & Message Too Long Tests ---
+
+
+@pytest.mark.asyncio
+async def test_call_with_retry_respects_retry_after() -> None:
+    """_call_with_retry waits for the RetryAfter duration before retrying."""
+    from telegram.error import RetryAfter
+
+    channel = TelegramChannel(
+        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"]),
+        MessageBus(),
+    )
+    channel._app = _FakeApp(lambda: None)
+
+    call_count = 0
+
+    async def flood_then_ok(**kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise RetryAfter(2)
+        return SimpleNamespace(message_id=1)
+
+    channel._app.bot.send_message = flood_then_ok
+
+    import time as _time
+
+    t0 = _time.monotonic()
+    await channel._call_with_retry(channel._app.bot.send_message, chat_id=123, text="hi")
+    elapsed = _time.monotonic() - t0
+
+    assert call_count == 2
+    assert elapsed >= 2.0
+
+
+@pytest.mark.asyncio
+async def test_send_delta_stream_end_splits_long_text() -> None:
+    """When final stream text exceeds limit, it should be split into multiple messages."""
+    from telegram.error import BadRequest
+
+    channel = TelegramChannel(
+        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"]),
+        MessageBus(),
+    )
+    channel._app = _FakeApp(lambda: None)
+
+    edit_calls = 0
+
+    async def too_long_then_ok_edit(**kwargs):
+        nonlocal edit_calls
+        edit_calls += 1
+        if edit_calls == 1:
+            raise BadRequest("Message is too long")
+        return SimpleNamespace(message_id=1)
+
+    channel._app.bot.edit_message_text = too_long_then_ok_edit
+
+    # Build text longer than TELEGRAM_MAX_MESSAGE_LEN
+    long_text = "word " * 1000  # ~5000 chars
+
+    channel._stream_bufs["123"] = _StreamBuf(
+        text=long_text, message_id=7, last_edit=0.0, stream_id="s:0"
+    )
+
+    await channel.send_delta("123", "", {"_stream_end": True, "_stream_id": "s:0"})
+
+    # Buffer should be cleaned up
+    assert "123" not in channel._stream_bufs
+    # edit_message_text should have been called (first chunk edit)
+    assert edit_calls >= 1
+    # send_message should have been called for overflow chunks
+    assert len(channel._app.bot.sent_messages) >= 1
+
+
+def test_is_message_too_long_error() -> None:
+    from telegram.error import BadRequest
+
+    assert TelegramChannel._is_message_too_long_error(BadRequest("Message is too long")) is True
+    assert (
+        TelegramChannel._is_message_too_long_error(BadRequest("Bad Request: message is too long"))
+        is True
+    )
+    assert TelegramChannel._is_message_too_long_error(BadRequest("Message is not modified")) is False
+    assert TelegramChannel._is_message_too_long_error(RuntimeError("other")) is False
+
+
+class TestRetryDelayFor:
+    def test_bad_request_is_non_retryable(self):
+        from telegram.error import BadRequest
+
+        result = ChannelManager._retry_delay_for(BadRequest("Message is too long"), 0)
+        assert result is None
+
+    def test_retry_after_uses_server_delay(self):
+        from telegram.error import RetryAfter
+
+        exc = RetryAfter(15)
+        result = ChannelManager._retry_delay_for(exc, 0)
+        assert result == 15.5  # 15 + 0.5 pad
+
+    def test_timed_out_uses_exponential_backoff(self):
+        from telegram.error import TimedOut
+
+        result = ChannelManager._retry_delay_for(TimedOut(), 0)
+        assert result == 1  # _SEND_RETRY_DELAYS[0]
+        result = ChannelManager._retry_delay_for(TimedOut(), 1)
+        assert result == 2  # _SEND_RETRY_DELAYS[1]
+
+    def test_generic_exception_uses_exponential_backoff(self):
+        result = ChannelManager._retry_delay_for(RuntimeError("boom"), 0)
+        assert result == 1

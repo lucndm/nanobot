@@ -13,7 +13,7 @@ from typing import Any, Literal
 from loguru import logger
 from pydantic import Field
 from telegram import BotCommand, ReactionTypeEmoji, ReplyParameters, Update
-from telegram.error import BadRequest, TimedOut
+from telegram.error import BadRequest, RetryAfter, TimedOut
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -513,10 +513,21 @@ class TelegramChannel(BaseChannel):
             self._send_duration.record(elapsed_ms, attributes={"channel": self.name})
 
     async def _call_with_retry(self, fn, *args, **kwargs):
-        """Call an async Telegram API function with retry on pool/network timeout."""
+        """Call an async Telegram API function with retry on pool/network timeout and flood control."""
         for attempt in range(1, _SEND_MAX_RETRIES + 1):
             try:
                 return await fn(*args, **kwargs)
+            except RetryAfter as e:
+                if attempt == _SEND_MAX_RETRIES:
+                    raise
+                delay = float(e._retry_after.total_seconds()) + 0.5
+                logger.warning(
+                    "Telegram flood control (attempt {}/{}), waiting {:.1f}s",
+                    attempt,
+                    _SEND_MAX_RETRIES,
+                    delay,
+                )
+                await asyncio.sleep(delay)
             except TimedOut:
                 if attempt == _SEND_MAX_RETRIES:
                     raise
@@ -611,6 +622,51 @@ class TelegramChannel(BaseChannel):
     def _is_not_modified_error(exc: Exception) -> bool:
         return isinstance(exc, BadRequest) and "message is not modified" in str(exc).lower()
 
+    @staticmethod
+    def _is_message_too_long_error(exc: Exception) -> bool:
+        return isinstance(exc, BadRequest) and "message is too long" in str(exc).lower()
+
+    async def _send_stream_end_long(
+        self,
+        buf: _StreamBuf,
+        int_chat_id: int,
+        text: str,
+    ) -> None:
+        """Handle stream-end when text exceeds Telegram message limit.
+
+        Edits the existing in-place message with the first chunk, then sends
+        remaining chunks as new messages.
+        """
+        chunks = split_message(text, TELEGRAM_MAX_MESSAGE_LEN)
+        if not chunks:
+            return
+
+        # Edit existing message with first chunk
+        first_chunk = chunks[0]
+        try:
+            await self._call_with_retry(
+                self._app.bot.edit_message_text,
+                chat_id=int_chat_id,
+                message_id=buf.message_id,
+                text=first_chunk,
+                parse_mode="HTML" if "<" in first_chunk else None,
+            )
+        except Exception as e:
+            if not self._is_not_modified_error(e):
+                logger.warning("Failed to edit stream message with first chunk: {}", e)
+
+        # Send remaining chunks as new messages
+        for chunk in chunks[1:]:
+            try:
+                await self._call_with_retry(
+                    self._app.bot.send_message,
+                    chat_id=int_chat_id,
+                    text=chunk,
+                    parse_mode="HTML" if "<" in chunk else None,
+                )
+            except Exception as e:
+                logger.warning("Failed to send overflow chunk: {}", e)
+
     async def send_delta(
         self, chat_id: str, delta: str, metadata: dict[str, Any] | None = None
     ) -> None:
@@ -628,6 +684,7 @@ class TelegramChannel(BaseChannel):
         if meta.get("_stream_end"):
             buf = self._stream_bufs.get(chat_id)
             if not buf or not buf.message_id or not buf.text:
+                self._stream_bufs.pop(chat_id, None)
                 return
             if stream_id is not None and buf.stream_id is not None and buf.stream_id != stream_id:
                 return
@@ -646,6 +703,14 @@ class TelegramChannel(BaseChannel):
                     logger.debug("Final stream edit already applied for {}", chat_id)
                     self._stream_bufs.pop(chat_id, None)
                     return
+                if self._is_message_too_long_error(e):
+                    logger.debug(
+                        "Stream final text too long for edit ({} chars), splitting",
+                        len(buf.text),
+                    )
+                    await self._send_stream_end_long(buf, int_chat_id, html)
+                    self._stream_bufs.pop(chat_id, None)
+                    return
                 logger.debug("Final stream edit failed (HTML), trying plain: {}", e)
                 try:
                     await self._call_with_retry(
@@ -659,7 +724,16 @@ class TelegramChannel(BaseChannel):
                         logger.debug("Final stream plain edit already applied for {}", chat_id)
                         self._stream_bufs.pop(chat_id, None)
                         return
+                    if self._is_message_too_long_error(e2):
+                        logger.debug(
+                            "Stream final plain text too long for edit ({} chars), splitting",
+                            len(buf.text),
+                        )
+                        await self._send_stream_end_long(buf, int_chat_id, buf.text)
+                        self._stream_bufs.pop(chat_id, None)
+                        return
                     logger.warning("Final stream edit failed: {}", e2)
+                    self._stream_bufs.pop(chat_id, None)
                     raise  # Let ChannelManager handle retry
             self._stream_bufs.pop(chat_id, None)
             return

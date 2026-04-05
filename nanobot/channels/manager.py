@@ -223,9 +223,12 @@ class ChannelManager:
         return merged, non_matching
 
     async def _send_with_retry(self, channel: BaseChannel, msg: OutboundMessage) -> None:
-        """Send a message with retry on failure using exponential backoff.
+        """Send a message with retry on failure.
 
-        Note: CancelledError is re-raised to allow graceful shutdown.
+        - RetryAfter: uses the server-specified delay
+        - TimedOut / transient: exponential backoff (1, 2, 4s)
+        - BadRequest: non-retryable (e.g. message too long)
+        - CancelledError: re-raised for graceful shutdown
         """
         max_attempts = max(self.config.channels.send_max_retries, 1)
 
@@ -236,6 +239,18 @@ class ChannelManager:
             except asyncio.CancelledError:
                 raise  # Propagate cancellation for graceful shutdown
             except Exception as e:
+                retry_delay = self._retry_delay_for(e, attempt)
+                if retry_delay is None:
+                    # Non-retryable error (e.g. BadRequest)
+                    logger.error(
+                        "Non-retryable send to {} (attempt {}/{}): {} - {}",
+                        msg.channel,
+                        attempt + 1,
+                        max_attempts,
+                        type(e).__name__,
+                        e,
+                    )
+                    return
                 if attempt == max_attempts - 1:
                     logger.error(
                         "Failed to send to {} after {} attempts: {} - {}",
@@ -245,19 +260,44 @@ class ChannelManager:
                         e,
                     )
                     return
-                delay = _SEND_RETRY_DELAYS[min(attempt, len(_SEND_RETRY_DELAYS) - 1)]
                 logger.warning(
-                    "Send to {} failed (attempt {}/{}): {}, retrying in {}s",
+                    "Send to {} failed (attempt {}/{}): {}, retrying in {:.1f}s",
                     msg.channel,
                     attempt + 1,
                     max_attempts,
                     type(e).__name__,
-                    delay,
+                    retry_delay,
                 )
                 try:
-                    await asyncio.sleep(delay)
+                    await asyncio.sleep(retry_delay)
                 except asyncio.CancelledError:
                     raise  # Propagate cancellation during sleep
+
+    @staticmethod
+    def _retry_delay_for(exc: Exception, attempt: int) -> float | None:
+        """Return retry delay in seconds, or None if non-retryable.
+
+        Uses duck-typing on exception name to keep ChannelManager channel-agnostic.
+        """
+        exc_name = type(exc).__name__
+
+        # Non-retryable: BadRequest (message too long, bad format, etc.)
+        if exc_name == "BadRequest":
+            return None
+
+        # RetryAfter: use server-specified delay
+        if exc_name == "RetryAfter":
+            try:
+                retry_after = getattr(exc, "_retry_after", None)
+                if retry_after is not None:
+                    return float(retry_after.total_seconds()) + 0.5
+            except Exception:
+                pass
+            # Fallback if we can't read the delay
+            return _SEND_RETRY_DELAYS[min(attempt, len(_SEND_RETRY_DELAYS) - 1)]
+
+        # Transient errors: exponential backoff
+        return _SEND_RETRY_DELAYS[min(attempt, len(_SEND_RETRY_DELAYS) - 1)]
 
     def get_channel(self, name: str) -> BaseChannel | None:
         """Get a channel by name."""
