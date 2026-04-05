@@ -263,41 +263,61 @@ class PostgresMemoryStore:
         return [(r[0], r[1], r[2], r[3]) for r in rows]
 
     def sync_topic_files(self, workspace: Path) -> None:
-        """Regenerate all TOPIC.md files from DB and clean up orphan topic dirs.
+        """Regenerate all TOPIC.md files from topic_mapping (DB is source of truth).
 
-        DB is source of truth:
-        - Topics in DB  -> create/update TOPIC.md from DB content
-        - Topics on disk but NOT in DB -> delete orphan topic directory
-
-        Note: topic_name is normalized (lowercase, spaces→hyphens) to derive
-        the directory path, matching the convention used by context.py and
-        setup_topic.py.
+        Folder structure: topics/<chat_id>/<thread_id>/TOPIC.md
+        - Source of truth: topic_mapping(chat_id, thread_id) -> topic_name
+        - Litellm config: topic_litellm(topic_name) (shared across threads with same topic)
+        - Purpose: topic_memory(topic_name)
+        - Orphan dirs (chat_id/thread_id not in topic_mapping) -> deleted
         """
         import shutil
-
-        def _topic_key(topic_name: str) -> str:
-            return topic_name.lower().replace(" ", "-").replace("_", "-").strip("-")
 
         topics_dir = workspace / "topics"
         topics_dir.mkdir(parents=True, exist_ok=True)
 
-        db_topics = {row[0] for row in self._list_topic_litellm()}
-        # Map normalized key -> original topic_name
-        db_key_to_name = {_topic_key(t): t for t in db_topics}
+        # Load all chat_id/thread_id -> topic_name mappings
+        mappings = self.load_all_topic_mappings()
+        valid_paths: set[tuple[int, int]] = set(mappings.keys())
 
-        # Delete orphan dirs (on disk but not in DB), using normalized keys
-        for topic_dir in topics_dir.iterdir():
-            if not topic_dir.is_dir():
+        # Delete orphan chat_id dirs
+        for chat_dir in topics_dir.iterdir():
+            if not chat_dir.is_dir():
                 continue
-            if topic_dir.name not in db_key_to_name:
-                shutil.rmtree(topic_dir)
-                logger.info("sync_topic_files: removed orphan topic dir '{}'", topic_dir.name)
+            # Detect orphan: top-level chat dir not in any mapping
+            try:
+                chat_id = int(chat_dir.name)
+            except ValueError:
+                # Not a numeric chat_id dir, skip
+                continue
+
+            for thread_dir in chat_dir.iterdir():
+                if not thread_dir.is_dir():
+                    continue
+                try:
+                    thread_id = int(thread_dir.name)
+                except ValueError:
+                    continue
+
+                if (chat_id, thread_id) not in valid_paths:
+                    shutil.rmtree(thread_dir)
+                    logger.info(
+                        "sync_topic_files: removed orphan thread dir {}/{}",
+                        chat_id,
+                        thread_id,
+                    )
+
+            # Delete empty chat dirs after orphan thread cleanup
+            if not any(chat_dir.iterdir()):
+                shutil.rmtree(chat_dir)
+                logger.info("sync_topic_files: removed empty chat dir {}", chat_id)
 
         # Sync topics from DB -> create or update files
-        for topic_name in db_topics:
-            key = _topic_key(topic_name)
-            topic_dir = topics_dir / key
-            topic_dir.mkdir(parents=True, exist_ok=True)
+        for (chat_id, thread_id), topic_name in mappings.items():
+            chat_dir = topics_dir / str(chat_id)
+            chat_dir.mkdir(parents=True, exist_ok=True)
+            thread_dir = chat_dir / str(thread_id)
+            thread_dir.mkdir(parents=True, exist_ok=True)
 
             litellm_config = self.get_topic_litellm(topic_name)
             if litellm_config:
@@ -305,7 +325,7 @@ class PostgresMemoryStore:
             else:
                 model, temp, tokens = "", None, None
 
-            topic_file = topic_dir / "TOPIC.md"
+            topic_file = thread_dir / "TOPIC.md"
             purpose = self.read_topic_memory(topic_name) or ""
             purpose_section = f"## purpose\n{purpose.strip()}\n\n" if purpose.strip() else ""
 

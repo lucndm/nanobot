@@ -246,32 +246,36 @@ class TestTopicLitellm:
 
 class TestTopicLitellmSync:
     def test_sync_creates_topic_md_from_store(self, tmp_path: Path):
+        """TOPIC.md is created at topics/<chat_id>/<thread_id>/TOPIC.md from topic_mapping."""
         from nanobot.agent.store_sqlite import SqliteMemoryStore
         store = SqliteMemoryStore(tmp_path)
+        # topic_mapping is the source of truth for folder structure
+        store.set_topic_mapping(123, 456, "my-topic")
         store.set_topic_litellm("my-topic", "test/model", 0.7, 4096)
 
         store.sync_topic_files(tmp_path)
 
-        topic_file = tmp_path / "topics" / "my-topic" / "TOPIC.md"
+        topic_file = tmp_path / "topics" / "123" / "456" / "TOPIC.md"
         assert topic_file.exists()
         content = topic_file.read_text()
         assert "test/model" in content
 
     def test_sync_deletes_orphan_topic_dirs(self, tmp_path: Path):
-        """Orphan topic dirs (on disk but not in DB) are DELETED -- DB is source of truth."""
+        """Orphan topic dirs (chat_id/thread_id not in topic_mapping) are DELETED."""
         from nanobot.agent.store_sqlite import SqliteMemoryStore
         store = SqliteMemoryStore(tmp_path)
 
-        # Create an orphan topic dir (exists on disk but not in DB)
-        topic_dir = tmp_path / "topics" / "orphan-topic"
-        topic_dir.mkdir(parents=True)
-        (topic_dir / "TOPIC.md").write_text(
+        # Create an orphan thread dir (exists on disk but not in topic_mapping)
+        orphan_chat_dir = tmp_path / "topics" / "999"
+        orphan_thread_dir = orphan_chat_dir / "888"
+        orphan_thread_dir.mkdir(parents=True)
+        (orphan_thread_dir / "TOPIC.md").write_text(
             "# Topic: orphan-topic\n\n## litellm\nmodel: orphan/model\ntemperature: 0.5\nmax_tokens: 2048\n"
         )
-        assert topic_dir.exists()
+        assert orphan_thread_dir.exists()
 
         store.sync_topic_files(tmp_path)
 
-        # Orphan dir must be deleted from disk
-        assert not topic_dir.exists()
-        assert store.get_topic_litellm("orphan-topic") is None
+        # Orphan thread dir must be deleted; empty chat dir is also removed
+        assert not orphan_thread_dir.exists()
+        assert not orphan_chat_dir.exists()

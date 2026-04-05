@@ -93,11 +93,12 @@ class SetupTopicTool(Tool):
         return []
 
     def _write_topic_file(self, purpose: str, model: str | None) -> None:
-        """Write the TOPIC.md file."""
-        key = self._topic_name.lower().replace(" ", "-").replace("_", "-").strip("-")
-        topic_dir = self._workspace / "topics" / key
-        topic_dir.mkdir(parents=True, exist_ok=True)
-        topic_file = topic_dir / "TOPIC.md"
+        """Write the TOPIC.md file at topics/<chat_id>/<thread_id>/TOPIC.md."""
+        chat_dir = self._workspace / "topics" / str(self._chat_id)
+        chat_dir.mkdir(parents=True, exist_ok=True)
+        thread_dir = chat_dir / str(self._thread_id)
+        thread_dir.mkdir(parents=True, exist_ok=True)
+        topic_file = thread_dir / "TOPIC.md"
 
         model_line = f"model: {model}" if model else "model:"
         content = f"""# Topic: {self._topic_name}
@@ -111,7 +112,12 @@ temperature:
 max_tokens:
 """
         topic_file.write_text(content, encoding="utf-8")
-        logger.info("setup_topic: wrote TOPIC.md for '{}' at {}", self._topic_name, topic_file)
+        logger.info(
+            "setup_topic: wrote TOPIC.md for '{}' at {}/{}",
+            self._topic_name,
+            self._chat_id,
+            self._thread_id,
+        )
 
     async def execute(self, purpose: str, model: str | None = None) -> str:
         if not self._topic_name:
