@@ -977,6 +977,26 @@ class TelegramChannel(BaseChannel):
             self._topic_store.set_topic_mapping(chat_id, thread_id, name)
         logger.debug("Persisted topic mapping: thread_id={} -> '{}'", thread_id, name)
 
+    async def _handle_new_topic(
+        self, chat_id: int, thread_id: int, topic_name: str, purpose: str
+    ) -> None:
+        """Create TOPIC.md and persist mapping for a new topic.
+
+        Called when a topic has no existing TOPIC.md or mapping.
+        """
+        key = topic_name.lower().replace(" ", "-").replace("_", "-").strip("-")
+        topic_dir = self.workspace / "topics" / key
+        topic_dir.mkdir(parents=True, exist_ok=True)
+        topic_file = topic_dir / "TOPIC.md"
+
+        content = f"# Topic: {topic_name}\n\n## purpose\n{purpose}\n"
+        topic_file.write_text(content, encoding="utf-8")
+        logger.info("Created TOPIC.md for topic '{}' at {}", topic_name, topic_file)
+
+        # Persist mapping
+        self._topic_names[thread_id] = topic_name
+        self._topic_store.set_topic_mapping(chat_id, thread_id, topic_name)
+
     @staticmethod
     def _extract_reply_context(message) -> str | None:
         """Extract text from the message being replied to, if any."""
