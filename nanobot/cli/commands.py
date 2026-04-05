@@ -506,7 +506,7 @@ def gateway(
         retention=1,  # Keep 1 file
         enqueue=True,
     )
-    logger.add(sys.stderr, level="INFO")  # Keep stderr output
+    logger.add(sys.stderr, level="DEBUG")  # Keep stderr output
 
     from nanobot.agent.loop import AgentLoop
     from nanobot.agent.store import create_memory_store
@@ -764,7 +764,7 @@ def agent(
         retention=1,  # Keep 1 file
         enqueue=True,
     )
-    logger.add(sys.stderr, level="INFO")  # Keep stderr output
+    logger.add(sys.stderr, level="DEBUG")  # Keep stderr output
 
     from nanobot.agent.loop import AgentLoop
     from nanobot.agent.store import create_memory_store

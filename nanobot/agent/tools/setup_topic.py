@@ -121,13 +121,28 @@ max_tokens:
 
     async def execute(self, purpose: str, model: str | None = None) -> str:
         if not self._topic_name:
+            logger.error("setup_topic: no topic_name set in context")
             return "Error: No topic context set. Cannot set up topic without knowing its name."
 
         if self._chat_id is None or self._thread_id is None:
+            logger.error(
+                "setup_topic: missing context chat_id={}, thread_id={}",
+                self._chat_id,
+                self._thread_id,
+            )
             return (
                 f"Error: Missing context (chat_id={self._chat_id}, "
                 f"thread_id={self._thread_id}). Cannot set up topic."
             )
+
+        logger.debug(
+            "setup_topic: executing for topic='{}', chat_id={}, thread_id={}, purpose='{}', model={}",
+            self._topic_name,
+            self._chat_id,
+            self._thread_id,
+            purpose[:50],
+            model,
+        )
 
         available_models = self._get_available_models()
 

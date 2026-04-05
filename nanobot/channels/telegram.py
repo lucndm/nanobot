@@ -1149,14 +1149,28 @@ class TelegramChannel(BaseChannel):
         self._remember_thread_context(message)
         meta = self._build_message_metadata(message, user)
         topic_name = await self._resolve_topic_name(message)
+        thread_id = getattr(message, "message_thread_id", None)
         if topic_name:
             meta["topic_name"] = topic_name
             meta["topic_resolved"] = True
-            key = topic_name.lower().replace(" ", "-").replace("_", "-").strip("-")
-            topic_file = self.workspace / "topics" / key / "TOPIC.md"
+            # Check new path: topics/<chat_id>/<thread_id>/TOPIC.md
+            topic_file = self.workspace / "topics" / str(message.chat_id) / str(thread_id) / "TOPIC.md"
             meta["topic_configured"] = topic_file.exists()
+            logger.debug(
+                "Topic resolved: name='{}', chat_id={}, thread_id={}, configured={}, path={}",
+                topic_name,
+                message.chat_id,
+                thread_id,
+                topic_file.exists(),
+                topic_file,
+            )
         else:
             meta["topic_resolved"] = False
+            logger.debug(
+                "Topic not resolved: chat_id={}, thread_id={}",
+                message.chat_id,
+                thread_id,
+            )
         logger.info(
             "Command in chat_id={}, thread_id={}, topic={}",
             message.chat_id,
@@ -1228,15 +1242,28 @@ class TelegramChannel(BaseChannel):
         str_chat_id = str(chat_id)
         metadata = self._build_message_metadata(message, user)
         topic_name = await self._resolve_topic_name(message)
+        thread_id = getattr(message, "message_thread_id", None)
         if topic_name:
             metadata["topic_name"] = topic_name
             metadata["topic_resolved"] = True
-            key = topic_name.lower().replace(" ", "-").replace("_", "-").strip("-")
-            topic_file = self.workspace / "topics" / key / "TOPIC.md"
+            # Check new path: topics/<chat_id>/<thread_id>/TOPIC.md
+            topic_file = self.workspace / "topics" / str(chat_id) / str(thread_id) / "TOPIC.md"
             metadata["topic_configured"] = topic_file.exists()
+            logger.debug(
+                "Topic resolved: name='{}', chat_id={}, thread_id={}, configured={}, path={}",
+                topic_name,
+                chat_id,
+                thread_id,
+                topic_file.exists(),
+                topic_file,
+            )
         else:
             metadata["topic_resolved"] = False
-        thread_id = getattr(message, "message_thread_id", None)
+            logger.debug(
+                "Topic not resolved: chat_id={}, thread_id={}",
+                chat_id,
+                thread_id,
+            )
         logger.info(
             "Message in chat_id={}, thread_id={}, topic={}, forum={}",
             str_chat_id,
