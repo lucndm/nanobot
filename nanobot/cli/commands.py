@@ -509,14 +509,14 @@ def gateway(
     logger.add(sys.stderr, level="DEBUG")  # Keep stderr output
 
     from nanobot.agent.loop import AgentLoop
-    from nanobot.agent.store import create_memory_store
+    from nanobot.agent.store import MemoryStore
     from nanobot.bus.queue import MessageBus
     from nanobot.channels.manager import ChannelManager
     from nanobot.cron.service import CronService
     from nanobot.cron.types import CronJob
     from nanobot.heartbeat.service import HeartbeatService
     from nanobot.session.manager import SessionManager
-    from nanobot.session.store import create_session_store
+    from nanobot.session.store import SessionStore
 
     if verbose:
         import logging
@@ -530,7 +530,7 @@ def gateway(
     sync_workspace_templates(config.workspace_path)
     bus = MessageBus()
     provider = _make_provider(config)
-    session_manager = SessionManager(create_session_store(config, config.workspace_path))
+    session_manager = SessionManager(SessionStore(config.database.url, pool_size=config.database.pool_size))
 
     # Preserve existing single-workspace installs, but keep custom workspaces clean.
     if is_default_workspace(config.workspace_path):
@@ -541,7 +541,7 @@ def gateway(
     cron = CronService(cron_store_path)
 
     # Shared topic store for topic mapping persistence (shared with AgentLoop/SetupTopicTool)
-    topic_store = create_memory_store(config, config.workspace_path)
+    topic_store = MemoryStore(config.database.url, pool_size=config.database.pool_size)
 
     # Create agent with cron service
     agent = AgentLoop(
@@ -562,6 +562,7 @@ def gateway(
         timezone=config.agents.defaults.timezone,
         otel_config=config.otel,
         topic_store=topic_store,
+        memory_store=topic_store,
     )
 
     # Set cron callback (needs agent)
@@ -767,7 +768,7 @@ def agent(
     logger.add(sys.stderr, level="DEBUG")  # Keep stderr output
 
     from nanobot.agent.loop import AgentLoop
-    from nanobot.agent.store import create_memory_store
+    from nanobot.agent.store import MemoryStore
     from nanobot.bus.queue import MessageBus
     from nanobot.cron.service import CronService
 
@@ -786,7 +787,7 @@ def agent(
     cron = CronService(cron_store_path)
 
     # Shared topic store for topic mapping persistence (shared with SetupTopicTool)
-    topic_store = create_memory_store(config, config.workspace_path)
+    topic_store = MemoryStore(config.database.url, pool_size=config.database.pool_size)
 
     if logs:
         logger.enable("nanobot")
@@ -810,6 +811,7 @@ def agent(
         timezone=config.agents.defaults.timezone,
         config=config,
         topic_store=topic_store,
+        memory_store=topic_store,
     )
 
     # Shared reference for progress callbacks
