@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from loguru import logger
-from pydantic import Field
+from pydantic import ConfigDict, Field
 from telegram import BotCommand, ReactionTypeEmoji, ReplyParameters, Update
 from telegram.error import BadRequest, RetryAfter, TimedOut
 from telegram.ext import (
