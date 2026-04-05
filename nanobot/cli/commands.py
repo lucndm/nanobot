@@ -509,6 +509,7 @@ def gateway(
     logger.add(sys.stderr, level="INFO")  # Keep stderr output
 
     from nanobot.agent.loop import AgentLoop
+    from nanobot.agent.store import create_memory_store
     from nanobot.bus.queue import MessageBus
     from nanobot.channels.manager import ChannelManager
     from nanobot.cron.service import CronService
@@ -539,6 +540,9 @@ def gateway(
     cron_store_path = config.workspace_path / "cron" / "jobs.json"
     cron = CronService(cron_store_path)
 
+    # Shared topic store for topic mapping persistence (shared with AgentLoop/SetupTopicTool)
+    topic_store = create_memory_store(config, config.workspace_path)
+
     # Create agent with cron service
     agent = AgentLoop(
         bus=bus,
@@ -557,6 +561,7 @@ def gateway(
         channel_config=config.channel,
         timezone=config.agents.defaults.timezone,
         otel_config=config.otel,
+        topic_store=topic_store,
     )
 
     # Set cron callback (needs agent)
@@ -617,7 +622,7 @@ def gateway(
     cron.on_job = on_cron_job
 
     # Create channel manager
-    channels = ChannelManager(config, bus)
+    channels = ChannelManager(config, bus, topic_store=topic_store)
 
     def _pick_heartbeat_target() -> tuple[str, str, int | None]:
         return pick_heartbeat_target(channels.enabled_channels, session_manager)
@@ -762,6 +767,7 @@ def agent(
     logger.add(sys.stderr, level="INFO")  # Keep stderr output
 
     from nanobot.agent.loop import AgentLoop
+    from nanobot.agent.store import create_memory_store
     from nanobot.bus.queue import MessageBus
     from nanobot.cron.service import CronService
 
@@ -778,6 +784,9 @@ def agent(
     # Create cron service with workspace-scoped store
     cron_store_path = config.workspace_path / "cron" / "jobs.json"
     cron = CronService(cron_store_path)
+
+    # Shared topic store for topic mapping persistence (shared with SetupTopicTool)
+    topic_store = create_memory_store(config, config.workspace_path)
 
     if logs:
         logger.enable("nanobot")
@@ -800,6 +809,7 @@ def agent(
         channel_config=config.channel,
         timezone=config.agents.defaults.timezone,
         config=config,
+        topic_store=topic_store,
     )
 
     # Shared reference for progress callbacks

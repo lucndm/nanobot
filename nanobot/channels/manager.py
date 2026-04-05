@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -11,6 +11,9 @@ from nanobot.bus.events import OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.telegram import TelegramChannel
 from nanobot.config.schema import Config
+
+if TYPE_CHECKING:
+    from nanobot.channels.base import BaseChannel
 
 # Retry delays for message sending (exponential backoff: 1s, 2s, 4s)
 _SEND_RETRY_DELAYS = (1, 2, 4)
@@ -26,11 +29,12 @@ class ChannelManager:
     - Route outbound messages
     """
 
-    def __init__(self, config: Config, bus: MessageBus):
+    def __init__(self, config: Config, bus: MessageBus, topic_store=None):
         self.config = config
         self.bus = bus
         self.channels: dict[str, BaseChannel] = {}
         self._dispatch_task: asyncio.Task | None = None
+        self._topic_store = topic_store
 
         self._init_channels()
 
@@ -44,12 +48,12 @@ class ChannelManager:
             channel = TelegramChannel(cfg, self.bus, workspace=workspace)
             channel.transcription_api_key = self.config.litellm.groq_api_key
             # Share the memory store with channels for topic mapping
-            if workspace is not None and not hasattr(self, "_memory_store"):
+            if self._topic_store is None and workspace is not None:
                 from nanobot.agent.store import create_memory_store
 
-                self._memory_store = create_memory_store(self.config, workspace)
-            if hasattr(self, "_memory_store"):
-                channel.topic_store = self._memory_store
+                self._topic_store = create_memory_store(self.config, workspace)
+            if self._topic_store is not None:
+                channel.topic_store = self._topic_store
             self.channels["telegram"] = channel
             logger.info("Telegram channel enabled")
         except Exception as e:
@@ -129,10 +133,7 @@ class ChannelManager:
                 if msg.metadata.get("_progress"):
                     if msg.metadata.get("_tool_hint") and not self.config.channel.send_tool_hints:
                         continue
-                    if (
-                        not msg.metadata.get("_tool_hint")
-                        and not self.config.channel.send_progress
-                    ):
+                    if not msg.metadata.get("_tool_hint") and not self.config.channel.send_progress:
                         continue
 
                 # Coalesce consecutive _stream_delta messages for the same (channel, chat_id)

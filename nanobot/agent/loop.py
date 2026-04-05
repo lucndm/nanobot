@@ -22,6 +22,7 @@ from nanobot.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTo
 from nanobot.agent.tools.message import MessageTool
 from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.agent.tools.search import GlobTool, GrepTool
+from nanobot.agent.tools.setup_topic import SetupTopicTool
 from nanobot.agent.tools.shell import ExecTool
 from nanobot.agent.tools.spawn import SpawnTool
 from nanobot.agent.tools.web import WebFetchTool, WebSearchTool
@@ -33,6 +34,7 @@ from nanobot.session.manager import Session, SessionManager
 from nanobot.session.store import create_session_store
 
 if TYPE_CHECKING:
+    from nanobot.agent.store import MemoryStoreProtocol
     from nanobot.config.schema import ChannelConfig, ExecToolConfig, OtelConfig, WebSearchConfig
     from nanobot.cron.service import CronService
     from nanobot.observability.hook import OTelHook
@@ -71,6 +73,7 @@ class AgentLoop:
         timezone: str | None = None,
         otel_config: OtelConfig | None = None,
         config: Any | None = None,
+        topic_store: MemoryStoreProtocol | None = None,
     ):
         from nanobot.config.schema import ExecToolConfig, WebSearchConfig
 
@@ -90,6 +93,7 @@ class AgentLoop:
         self._last_usage: dict[str, int] = {}
 
         self.context = ContextBuilder(workspace, timezone=timezone)
+        self._topic_store = topic_store
 
         from nanobot.agent.memory_migrate import migrate_files_to_sqlite
 
@@ -177,6 +181,10 @@ class AgentLoop:
         self.tools.register(WebFetchTool(proxy=self.web_proxy))
         self.tools.register(MessageTool(send_callback=self.bus.publish_outbound))
         self.tools.register(SpawnTool(manager=self.subagents))
+        if self._topic_store:
+            self.tools.register(
+                SetupTopicTool(workspace=self.workspace, topic_store=self._topic_store)
+            )
         if self.cron_service:
             self.tools.register(
                 CronTool(self.cron_service, default_timezone=self.context.timezone or "UTC")
@@ -556,7 +564,9 @@ class AgentLoop:
             )
             meta = self._last_run_metadata
             self._save_turn(
-                session, all_msgs, 1 + len(history),
+                session,
+                all_msgs,
+                1 + len(history),
                 message_id=msg.metadata.get("message_id"),
                 model=meta.get("model"),
                 topic_id=meta.get("topic_id"),
@@ -597,6 +607,17 @@ class AgentLoop:
         if message_tool := self.tools.get("message"):
             if isinstance(message_tool, MessageTool):
                 message_tool.start_turn()
+        if setup_topic_tool := self.tools.get("setup_topic"):
+            if isinstance(setup_topic_tool, SetupTopicTool):
+                try:
+                    chat_id_int = int(msg.chat_id)
+                except (ValueError, TypeError):
+                    chat_id_int = None
+                setup_topic_tool.set_context(
+                    chat_id=chat_id_int,
+                    thread_id=msg.metadata.get("message_thread_id"),
+                    topic_name=msg.metadata.get("topic_name"),
+                )
 
         history = session.get_history(max_messages=0)
 
@@ -647,7 +668,9 @@ class AgentLoop:
 
         meta = self._last_run_metadata
         self._save_turn(
-            session, all_msgs, 1 + len(history),
+            session,
+            all_msgs,
+            1 + len(history),
             message_id=msg.metadata.get("message_id"),
             model=meta.get("model"),
             system_prompt_hash=system_prompt_hash,
@@ -722,7 +745,11 @@ class AgentLoop:
         return filtered
 
     def _save_turn(
-        self, session: Session, messages: list[dict], skip: int, *,
+        self,
+        session: Session,
+        messages: list[dict],
+        skip: int,
+        *,
         message_id: str | None = None,
         model: str | None = None,
         system_prompt_hash: str | None = None,
