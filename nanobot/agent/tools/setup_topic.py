@@ -128,7 +128,8 @@ max_tokens:
         # No model specified: list models and ask user to pick one
         if not model:
             # Persist purpose to topic_memory in PostgreSQL (source of truth)
-            self._topic_store.write_topic_memory(self._topic_name, f"## purpose\n{purpose}\n")
+            # Store just the purpose text — sync_topic_files will add the ## purpose header
+            self._topic_store.write_topic_memory(self._topic_name, purpose)
             self._topic_store.set_topic_mapping(self._chat_id, self._thread_id, self._topic_name)
             models_str = (
                 "\n".join(f"- {m}" for m in available_models)

@@ -283,41 +283,28 @@ class SqliteMemoryStore:
         return [(r[0], r[1], r[2], r[3]) for r in rows]
 
     def sync_topic_files(self, workspace: Path) -> None:
-        """Reconcile topic_litellm store with TOPIC.md files on disk."""
-        from nanobot.agent.topic_config import parse_topic_config
+        """Regenerate all TOPIC.md files from PostgreSQL (DB is source of truth).
 
+        This is a one-way sync: DB -> File. The file is always regenerated from DB,
+        never read back to update DB.
+        """
         topics_dir = workspace / "topics"
+        topics_dir.mkdir(parents=True, exist_ok=True)
 
-        # Import orphan files: TOPIC.md exists but no store entry
-        if topics_dir.exists():
-            for topic_dir in topics_dir.iterdir():
-                if not topic_dir.is_dir():
-                    continue
-                topic_file = topic_dir / "TOPIC.md"
-                if not topic_file.exists():
-                    continue
-                topic_name = topic_dir.name
-                existing = self.get_topic_litellm(topic_name)
-                if existing is None:
-                    content = topic_file.read_text(encoding="utf-8")
-                    config = parse_topic_config(content)
-                    if config and config.model:
-                        self.set_topic_litellm(
-                            topic_name,
-                            config.model,
-                            config.temperature if config.temperature is not None else 0.7,
-                            config.max_tokens if config.max_tokens is not None else 4096,
-                        )
-
-        # Rebuild missing files: store has entry but no TOPIC.md
         for topic_name, model, temp, tokens in self._list_topic_litellm():
-            topic_file = topics_dir / topic_name / "TOPIC.md"
-            if not topic_file.exists():
-                topic_file.parent.mkdir(parents=True, exist_ok=True)
-                topic_file.write_text(
-                    f"# Topic: {topic_name}\n\n## litellm\nmodel: {model}\ntemperature: {temp}\nmax_tokens: {tokens}\n",
-                    encoding="utf-8",
-                )
+            topic_dir = topics_dir / topic_name
+            topic_dir.mkdir(parents=True, exist_ok=True)
+            topic_file = topic_dir / "TOPIC.md"
+
+            # Read purpose from topic_memory (if any)
+            purpose = self.read_topic_memory(topic_name) or ""
+            purpose_section = f"## purpose\n{purpose.strip()}\n\n" if purpose.strip() else ""
+
+            topic_file.write_text(
+                f"# Topic: {topic_name}\n\n{purpose_section}## litellm\n"
+                f"model: {model}\ntemperature: {temp}\nmax_tokens: {tokens}\n",
+                encoding="utf-8",
+            )
 
     # ── Reactions ──────────────────────────────────────────────────
 

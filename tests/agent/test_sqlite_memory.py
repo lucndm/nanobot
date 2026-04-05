@@ -257,10 +257,12 @@ class TestTopicLitellmSync:
         content = topic_file.read_text()
         assert "test/model" in content
 
-    def test_sync_imports_orphan_topic_files(self, tmp_path: Path):
+    def test_sync_does_not_import_orphan_topic_files(self, tmp_path: Path):
+        """Orphan topic files (no DB entry) are NOT imported -- DB is source of truth."""
         from nanobot.agent.store_sqlite import SqliteMemoryStore
         store = SqliteMemoryStore(tmp_path)
 
+        # Create an orphan topic file (exists in filesystem but not in DB)
         topic_dir = tmp_path / "topics" / "orphan-topic"
         topic_dir.mkdir(parents=True)
         (topic_dir / "TOPIC.md").write_text(
@@ -269,6 +271,6 @@ class TestTopicLitellmSync:
 
         store.sync_topic_files(tmp_path)
 
+        # Orphan file should NOT be imported to DB
         result = store.get_topic_litellm("orphan-topic")
-        assert result is not None
-        assert result[0] == "orphan/model"
+        assert result is None
