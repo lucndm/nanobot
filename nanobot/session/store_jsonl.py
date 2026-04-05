@@ -137,17 +137,17 @@ class JsonlSessionStore:
                 continue
         return sorted(sessions, key=lambda x: x.get("updated_at", ""), reverse=True)
 
-    def consolidate(self, session_key: str, topic_name: str, summary: str, last_seq: int) -> None:
+    def consolidate(self, session_key: str, topic_id: str, summary: str, last_seq: int) -> None:
         pass  # JSONL store does not support consolidation
 
-    def get_summary(self, session_key: str, topic_name: str) -> dict | None:
+    def get_summary(self, session_key: str, topic_id: str) -> dict | None:
         return None
 
     def get_usage(
         self,
         *,
         session_key: str | None = None,
-        topic_name: str | None = None,
+        topic_id: str | None = None,
         model: str | None = None,
         since: Any | None = None,
     ) -> dict[str, int]:

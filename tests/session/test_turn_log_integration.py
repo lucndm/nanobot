@@ -27,15 +27,15 @@ def test_full_turn_lifecycle():
         conn.execute("DELETE FROM turn_summaries WHERE session_key = %s", (key,))
         conn.commit()
 
-    # Save turn 1
+    # Save turn 1 — topic_id is the stable thread_id (not the display name)
     store.save({
         "key": key,
         "messages": [
-            {"role": "user", "content": "hello", "topic_name": "general",
+            {"role": "user", "content": "hello", "topic_id": "42",
              "timestamp": datetime.now(timezone.utc).isoformat()},
             {"role": "assistant", "content": "hi", "model": "gpt-4o",
              "system_prompt_hash": "abc", "prompt_tokens": 50, "completion_tokens": 10,
-             "stop_reason": "stop", "topic_name": "general"},
+             "stop_reason": "stop", "topic_id": "42"},
         ],
     })
 
@@ -43,17 +43,18 @@ def test_full_turn_lifecycle():
     loaded = store.get_or_create(key)
     assert len(loaded["messages"]) == 2
     assert loaded["messages"][1]["model"] == "gpt-4o"
+    assert loaded["messages"][1]["topic_id"] == "42"
 
     # Verify usage
     usage = store.get_usage(session_key=key)
     assert usage["prompt_tokens"] == 50
     assert usage["completion_tokens"] == 10
 
-    # Consolidate
-    store.consolidate(key, "general", "User greeted bot", 2)
+    # Consolidate by topic_id
+    store.consolidate(key, "42", "User greeted bot", 2)
 
     # Verify summary
-    summary = store.get_summary(key, "general")
+    summary = store.get_summary(key, "42")
     assert summary["last_seq"] == 2
     assert "greeted" in summary["summary"]
 

@@ -341,7 +341,7 @@ class AgentLoop:
         self._last_usage = result.usage
         self._last_run_metadata: dict[str, Any] = {
             "model": self.model,
-            "topic_name": topic_name,
+            "topic_id": str(message_thread_id) if message_thread_id else None,
             "stop_reason": result.stop_reason,
             "usage": result.usage,
         }
@@ -545,7 +545,7 @@ class AgentLoop:
                 session, all_msgs, 1 + len(history),
                 message_id=msg.metadata.get("message_id"),
                 model=meta.get("model"),
-                topic_name=meta.get("topic_name"),
+                topic_id=meta.get("topic_id"),
                 stop_reason=meta.get("stop_reason"),
                 usage=meta.get("usage"),
             )
@@ -636,7 +636,7 @@ class AgentLoop:
             message_id=msg.metadata.get("message_id"),
             model=meta.get("model"),
             system_prompt_hash=system_prompt_hash,
-            topic_name=meta.get("topic_name"),
+            topic_id=meta.get("topic_id"),
             stop_reason=meta.get("stop_reason"),
             usage=meta.get("usage"),
         )
@@ -711,7 +711,7 @@ class AgentLoop:
         message_id: str | None = None,
         model: str | None = None,
         system_prompt_hash: str | None = None,
-        topic_name: str | None = None,
+        topic_id: str | None = None,
         stop_reason: str | None = None,
         usage: dict | None = None,
     ) -> None:
@@ -755,8 +755,8 @@ class AgentLoop:
                 entry["model"] = model
             if system_prompt_hash:
                 entry["system_prompt_hash"] = system_prompt_hash
-            if topic_name:
-                entry["topic_name"] = topic_name
+            if topic_id:
+                entry["topic_id"] = topic_id
             if stop_reason and role == "assistant":
                 entry["stop_reason"] = stop_reason
             if usage and role == "assistant":

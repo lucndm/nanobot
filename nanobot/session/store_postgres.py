@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS turn_log (
     cache_read_tokens     INTEGER DEFAULT 0,
     cache_creation_tokens INTEGER DEFAULT 0,
     stop_reason           TEXT,
-    topic_name            TEXT,
+    topic_id              TEXT,
     channel_message_id    TEXT,
     extra                 JSONB DEFAULT '{}',
     created_at            TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -42,11 +42,11 @@ CREATE INDEX IF NOT EXISTS idx_turn_created ON turn_log(created_at);
 
 CREATE TABLE IF NOT EXISTS turn_summaries (
     session_key   TEXT NOT NULL,
-    topic_name    TEXT NOT NULL DEFAULT '',
+    topic_id      TEXT NOT NULL DEFAULT '',
     summary       TEXT NOT NULL,
     last_seq      INTEGER NOT NULL,
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (session_key, topic_name)
+    PRIMARY KEY (session_key, topic_id)
 );
 """
 
@@ -84,7 +84,7 @@ class PostgresSessionStore:
                 "SELECT role, content, tool_calls, tool_call_id, tool_name, "
                 "model, system_prompt_hash, prompt_tokens, completion_tokens, "
                 "cache_read_tokens, cache_creation_tokens, stop_reason, "
-                "topic_name, channel_message_id, extra, seq "
+                "topic_id, channel_message_id, extra, seq "
                 "FROM turn_log WHERE session_key = %s ORDER BY seq",
                 (key,),
             ).fetchall()
@@ -117,7 +117,7 @@ class PostgresSessionStore:
             if row[11] is not None:
                 msg["stop_reason"] = row[11]
             if row[12] is not None:
-                msg["topic_name"] = row[12]
+                msg["topic_id"] = row[12]
             if row[13] is not None:
                 msg["channel_message_id"] = row[13]
                 # Backward compat: also expose as telegram_message_id
@@ -158,7 +158,7 @@ class PostgresSessionStore:
                     "INSERT INTO turn_log "
                     "(session_key, seq, role, content, tool_calls, tool_call_id, tool_name, "
                     "model, system_prompt_hash, prompt_tokens, completion_tokens, "
-                    "cache_read_tokens, cache_creation_tokens, stop_reason, topic_name, "
+                    "cache_read_tokens, cache_creation_tokens, stop_reason, topic_id, "
                     "channel_message_id, extra) "
                     "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                     (
@@ -169,32 +169,32 @@ class PostgresSessionStore:
                         msg.get("model"), msg.get("system_prompt_hash"),
                         msg.get("prompt_tokens", 0), msg.get("completion_tokens", 0),
                         msg.get("cache_read_tokens", 0), msg.get("cache_creation_tokens", 0),
-                        msg.get("stop_reason"), msg.get("topic_name"),
+                        msg.get("stop_reason"), msg.get("topic_id"),
                         ch_msg_id,
                         _sanitize(extra),
                     ),
                 )
             conn.commit()
 
-    def consolidate(self, session_key: str, topic_name: str, summary: str, last_seq: int) -> None:
+    def consolidate(self, session_key: str, topic_id: str, summary: str, last_seq: int) -> None:
         """Upsert consolidation summary. turn_log rows are kept."""
         with self._pool.connection() as conn:
             conn.execute(
-                "INSERT INTO turn_summaries (session_key, topic_name, summary, last_seq, updated_at) "
+                "INSERT INTO turn_summaries (session_key, topic_id, summary, last_seq, updated_at) "
                 "VALUES (%s, %s, %s, %s, now()) "
-                "ON CONFLICT (session_key, topic_name) DO UPDATE "
+                "ON CONFLICT (session_key, topic_id) DO UPDATE "
                 "SET summary = EXCLUDED.summary, last_seq = EXCLUDED.last_seq, updated_at = now()",
-                (session_key, topic_name or "", summary, last_seq),
+                (session_key, topic_id or "", summary, last_seq),
             )
             conn.commit()
 
-    def get_summary(self, session_key: str, topic_name: str) -> dict | None:
+    def get_summary(self, session_key: str, topic_id: str) -> dict | None:
         """Get consolidation summary for a session+topic."""
         with self._pool.connection() as conn:
             row = conn.execute(
                 "SELECT summary, last_seq, updated_at FROM turn_summaries "
-                "WHERE session_key = %s AND topic_name = %s",
-                (session_key, topic_name or ""),
+                "WHERE session_key = %s AND topic_id = %s",
+                (session_key, topic_id or ""),
             ).fetchone()
         if not row:
             return None
@@ -204,7 +204,7 @@ class PostgresSessionStore:
         self,
         *,
         session_key: str | None = None,
-        topic_name: str | None = None,
+        topic_id: str | None = None,
         model: str | None = None,
         since: datetime | None = None,
     ) -> dict[str, int]:
@@ -214,9 +214,9 @@ class PostgresSessionStore:
         if session_key:
             conditions.append("session_key = %s")
             params.append(session_key)
-        if topic_name:
-            conditions.append("topic_name = %s")
-            params.append(topic_name)
+        if topic_id:
+            conditions.append("topic_id = %s")
+            params.append(topic_id)
         if model:
             conditions.append("model = %s")
             params.append(model)

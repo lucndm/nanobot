@@ -32,11 +32,11 @@ class SessionStoreProtocol(Protocol):
         """
         ...
 
-    def consolidate(self, session_key: str, topic_name: str, summary: str, last_seq: int) -> None:
+    def consolidate(self, session_key: str, topic_id: str, summary: str, last_seq: int) -> None:
         """Store consolidation summary for a session+topic."""
         ...
 
-    def get_summary(self, session_key: str, topic_name: str) -> dict | None:
+    def get_summary(self, session_key: str, topic_id: str) -> dict | None:
         """Get consolidation summary. Returns None if no summary exists."""
         ...
 
@@ -44,7 +44,7 @@ class SessionStoreProtocol(Protocol):
         self,
         *,
         session_key: str | None = None,
-        topic_name: str | None = None,
+        topic_id: str | None = None,
         model: str | None = None,
         since: Any | None = None,
     ) -> dict[str, int]:
