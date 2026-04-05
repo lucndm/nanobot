@@ -1205,3 +1205,149 @@ class TestRetryDelayFor:
     def test_generic_exception_uses_exponential_backoff(self):
         result = ChannelManager._retry_delay_for(RuntimeError("boom"), 0)
         assert result == 1
+
+
+class TestSmartContentSending:
+    """Integration tests for smart splitter + image rendering in TelegramChannel."""
+
+    @pytest.fixture()
+    def _channel(self):
+        config = TelegramConfig(enabled=True, token="123:abc", allow_from=["*"])
+        ch = TelegramChannel(config, MessageBus())
+        ch._app = _FakeApp(lambda: None)
+        return ch
+
+    @pytest.mark.asyncio
+    async def test_long_code_block_is_split_into_chunks(self, _channel) -> None:
+        """A long code block exceeding the max message length should be split."""
+        # Build a code block that exceeds TELEGRAM_MAX_MESSAGE_LEN
+        long_line = "x" * 100
+        code_content = "\n".join([long_line for _ in range(50)])  # ~5000 chars
+        text = f"```python\n{code_content}\n```"
+
+        await _channel.send(
+            OutboundMessage(channel="telegram", chat_id="123", content=text)
+        )
+
+        # Should have sent at least 2 messages
+        assert len(_channel._app.bot.sent_messages) >= 2
+
+    @pytest.mark.asyncio
+    async def test_small_table_sent_as_single_message(self, _channel) -> None:
+        """A table that fits within limits should be sent as a single text message."""
+        table = "| Col A | Col B |\n|-------|-------|\n| 1     | 2     |\n| 3     | 4     |"
+        await _channel.send(
+            OutboundMessage(channel="telegram", chat_id="123", content=table)
+        )
+
+        # Should be sent as text, not photo
+        assert len(_channel._app.bot.sent_messages) == 1
+        assert len(_channel._app.bot.sent_media) == 0
+
+    @pytest.mark.asyncio
+    async def test_mermaid_diagram_triggers_send_photo(self, _channel, monkeypatch) -> None:
+        """A mermaid diagram should be rendered as PNG and sent via send_photo."""
+        fake_png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100  # minimal PNG header
+
+        async def fake_render(text: str, diagram_type: str, **kwargs) -> bytes | None:
+            return fake_png
+
+        monkeypatch.setattr(_channel._renderer, "render", fake_render)
+
+        diagram = "```mermaid\ngraph LR\n  A --> B\n```"
+        await _channel.send(
+            OutboundMessage(channel="telegram", chat_id="123", content=diagram)
+        )
+
+        # Should have sent a photo, not text
+        assert len(_channel._app.bot.sent_media) == 1
+        assert _channel._app.bot.sent_media[0]["kind"] == "photo"
+
+    @pytest.mark.asyncio
+    async def test_diagram_fallback_to_text_on_render_failure(self, _channel, monkeypatch) -> None:
+        """When KrokiRenderer returns None, diagram should be sent as text (fallback)."""
+        async def fake_render_none(text: str, diagram_type: str, **kwargs) -> None:
+            return None
+
+        monkeypatch.setattr(_channel._renderer, "render", fake_render_none)
+
+        diagram = "```mermaid\ngraph LR\n  A --> B\n```"
+        await _channel.send(
+            OutboundMessage(channel="telegram", chat_id="123", content=diagram)
+        )
+
+        # Should fall back to text, not photo
+        assert len(_channel._app.bot.sent_media) == 0
+        assert len(_channel._app.bot.sent_messages) == 1
+        # The fallback wraps in code fences, which _markdown_to_telegram_html converts
+        sent_text = _channel._app.bot.sent_messages[0]["text"]
+        assert "mermaid" in sent_text or "graph LR" in sent_text
+
+    @pytest.mark.asyncio
+    async def test_render_diagrams_false_sends_diagram_as_text(self, _channel) -> None:
+        """When render_diagrams is False, diagrams should be sent as text."""
+        _channel.config.render_diagrams = False
+
+        diagram = "```mermaid\ngraph LR\n  A --> B\n```"
+        await _channel.send(
+            OutboundMessage(channel="telegram", chat_id="123", content=diagram)
+        )
+
+        assert len(_channel._app.bot.sent_media) == 0
+        assert len(_channel._app.bot.sent_messages) == 1
+
+    @pytest.mark.asyncio
+    async def test_large_table_rendered_as_image(self, _channel, monkeypatch) -> None:
+        """A table with very long lines should be rendered as PNG image."""
+        # Build a table with very wide rows
+        header = "| " + " | ".join([f"Col{i}" for i in range(80)]) + " |"
+        sep = "| " + " | ".join(["---"] * 80) + " |"
+        row = "| " + " | ".join([f"val{i}" for i in range(80)]) + " |"
+        table = f"{header}\n{sep}\n{row}"
+
+        await _channel.send(
+            OutboundMessage(channel="telegram", chat_id="123", content=table)
+        )
+
+        # Should have been rendered as image (wide table exceeds table_max_cols=60)
+        photos = [m for m in _channel._app.bot.sent_media if m["kind"] == "photo"]
+        assert len(photos) == 1
+
+    @pytest.mark.asyncio
+    async def test_render_tables_false_sends_table_as_text(self, _channel) -> None:
+        """When render_tables is False, wide tables should be sent as text."""
+        _channel.config.render_tables = False
+
+        header = "| " + " | ".join([f"Col{i}" for i in range(80)]) + " |"
+        sep = "| " + " | ".join(["---"] * 80) + " |"
+        row = "| " + " | ".join([f"val{i}" for i in range(80)]) + " |"
+        table = f"{header}\n{sep}\n{row}"
+
+        await _channel.send(
+            OutboundMessage(channel="telegram", chat_id="123", content=table)
+        )
+
+        # Should be sent as text, not photo
+        assert len(_channel._app.bot.sent_media) == 0
+        assert len(_channel._app.bot.sent_messages) >= 1
+
+    @pytest.mark.asyncio
+    async def test_mixed_content_splits_correctly(self, _channel) -> None:
+        """Mixed content (text + code + diagram) should be handled properly."""
+        fake_png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+
+        async def fake_render(text: str, diagram_type: str, **kwargs) -> bytes | None:
+            return fake_png
+
+        _channel._renderer.render = fake_render
+
+        content = "Here is some text.\n\n```mermaid\ngraph LR\n  A --> B\n```\n\nMore text."
+        await _channel.send(
+            OutboundMessage(channel="telegram", chat_id="123", content=content)
+        )
+
+        # Diagram should be sent as photo, text parts as messages
+        photos = [m for m in _channel._app.bot.sent_media if m["kind"] == "photo"]
+        assert len(photos) == 1
+        # Remaining text should be sent as messages
+        assert len(_channel._app.bot.sent_messages) >= 1

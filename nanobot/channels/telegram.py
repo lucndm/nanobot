@@ -32,7 +32,10 @@ from nanobot.config.paths import get_media_dir
 from nanobot.config.schema import Base
 from nanobot.observability.otel import get_meter
 from nanobot.security.network import validate_url_target
-from nanobot.utils.helpers import split_message
+from nanobot.utils.blocks import BlockType, parse_blocks
+from nanobot.utils.helpers import split_message  # noqa: F401 kept for backward compat
+from nanobot.utils.renderer import KrokiRenderer, render_table_pillow
+from nanobot.utils.splitter import smart_split_message
 
 TELEGRAM_MAX_MESSAGE_LEN = 4000  # Telegram message character limit
 TELEGRAM_REPLY_CONTEXT_MAX_LEN = (
@@ -196,6 +199,11 @@ class TelegramConfig(Base):
     connection_pool_size: int = 32
     pool_timeout: float = 5.0
     streaming: bool = True
+    kroki_url: str = "https://kroki.io"
+    render_timeout: float = 10.0
+    render_tables: bool = True
+    render_diagrams: bool = True
+    table_max_cols: int = 60
 
 
 class TelegramChannel(BaseChannel):
@@ -246,6 +254,11 @@ class TelegramChannel(BaseChannel):
         self._bot_user_id: int | None = None
         self._bot_username: str | None = None
         self._stream_bufs: dict[str, _StreamBuf] = {}  # chat_id -> streaming state
+
+        self._renderer = KrokiRenderer(
+            base_url=self.config.kroki_url,
+            timeout=self.config.render_timeout,
+        )
 
         # Observability: send duration histogram + error counter
         meter = get_meter()
@@ -504,14 +517,9 @@ class TelegramChannel(BaseChannel):
                     **thread_kwargs,
                 )
 
-        # Send text content
+        # Send text content (smart splitting + image rendering)
         if msg.content and msg.content != "[empty message]":
-            for chunk in split_message(msg.content, TELEGRAM_MAX_MESSAGE_LEN):
-                if self._msg_counter:
-                    self._msg_counter.add(
-                        1, attributes={"channel": self.name, "direction": "outbound"}
-                    )
-                await self._send_text(chat_id, chunk, reply_params, thread_kwargs)
+            await self._send_smart_content(chat_id, msg.content, reply_params, thread_kwargs)
 
         # Record send duration
         elapsed_ms = (time.monotonic() - send_start) * 1000
@@ -624,6 +632,90 @@ class TelegramChannel(BaseChannel):
                     )
                 raise
 
+    async def _send_smart_content(
+        self,
+        chat_id: int,
+        text: str,
+        reply_params=None,
+        thread_kwargs: dict | None = None,
+    ) -> None:
+        """Parse content, render diagrams/tables as images, split text smartly."""
+        thread_kwargs = thread_kwargs or {}
+        blocks = parse_blocks(text)
+        text_parts: list[str] = []
+
+        for block in blocks:
+            # Diagram rendering
+            if block.type == BlockType.DIAGRAM and self.config.render_diagrams:
+                image_data = await self._renderer.render(block.content, block.diagram_type)
+                if image_data:
+                    if self._msg_counter:
+                        self._msg_counter.add(
+                            1, attributes={"channel": self.name, "direction": "outbound"}
+                        )
+                    await self._send_image_bytes(chat_id, image_data, reply_params, thread_kwargs)
+                    continue
+                # Fallback: send as text
+                text_parts.append(f"```{block.diagram_type}\n{block.content}```")
+                continue
+
+            # Large table rendering
+            if block.type == BlockType.TABLE and self.config.render_tables:
+                max_line = max((len(line) for line in block.content.split("\n")), default=0)
+                if len(block.content) > TELEGRAM_MAX_MESSAGE_LEN or max_line > self.config.table_max_cols:
+                    image_data = render_table_pillow(block.content)
+                    if image_data:
+                        if self._msg_counter:
+                            self._msg_counter.add(
+                                1, attributes={"channel": self.name, "direction": "outbound"}
+                            )
+                        await self._send_image_bytes(chat_id, image_data, reply_params, thread_kwargs)
+                        continue
+                text_parts.append(block.content)
+                continue
+
+            # All other blocks -> collect for smart splitting
+            if block.type == BlockType.CODE:
+                text_parts.append(f"```{block.lang}\n{block.content}```")
+            elif block.type == BlockType.HEADING:
+                text_parts.append(f"## {block.content}")
+            else:
+                text_parts.append(block.content)
+
+        # Smart split remaining text
+        combined = "\n\n".join(text_parts)
+        if combined.strip():
+            for chunk in smart_split_message(combined, TELEGRAM_MAX_MESSAGE_LEN):
+                if self._msg_counter:
+                    self._msg_counter.add(
+                        1, attributes={"channel": self.name, "direction": "outbound"}
+                    )
+                await self._send_text(chat_id, chunk, reply_params, thread_kwargs)
+
+    async def _send_image_bytes(
+        self,
+        chat_id: int,
+        image_data: bytes,
+        reply_params=None,
+        thread_kwargs: dict | None = None,
+    ) -> None:
+        """Send PNG image bytes to Telegram chat."""
+        import io
+
+        thread_kwargs = thread_kwargs or {}
+        buf = io.BytesIO(image_data)
+        buf.name = "diagram.png"
+        try:
+            await self._call_with_retry(
+                self._app.bot.send_photo,
+                chat_id=chat_id,
+                photo=buf,
+                reply_parameters=reply_params,
+                **thread_kwargs,
+            )
+        except Exception as e:
+            logger.warning("Failed to send image: {}", e)
+
     @staticmethod
     def _is_not_modified_error(exc: Exception) -> bool:
         return isinstance(exc, BadRequest) and "message is not modified" in str(exc).lower()
@@ -643,7 +735,7 @@ class TelegramChannel(BaseChannel):
         Edits the existing in-place message with the first chunk, then sends
         remaining chunks as new messages.
         """
-        chunks = split_message(text, TELEGRAM_MAX_MESSAGE_LEN)
+        chunks = smart_split_message(text, TELEGRAM_MAX_MESSAGE_LEN)
         if not chunks:
             return
 
