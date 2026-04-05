@@ -1,4 +1,4 @@
-"""Tests for PostgresSessionStore with append-only turn_log schema."""
+"""Tests for SessionStore with append-only turn_log schema."""
 
 from __future__ import annotations
 
@@ -10,15 +10,15 @@ import pytest
 pg_url = os.environ.get("NANOBOT_PG_URL", "")
 pytestmark = pytest.mark.skipif(
     not pg_url,
-    reason="Set NANOBOT_PG_URL to run PostgresSessionStore tests",
+    reason="Set NANOBOT_PG_URL to run SessionStore tests",
 )
 
 
 @pytest.fixture()
 def store():
-    from nanobot.session.store_postgres import PostgresSessionStore
+    from nanobot.session.store import SessionStore
 
-    s = PostgresSessionStore(pg_url, pool_size=2)
+    s = SessionStore(pg_url, pool_size=2)
     # Clean slate
     with s._pool.connection() as conn:
         conn.execute("DELETE FROM turn_log")
@@ -209,11 +209,11 @@ def test_sanitize_null_bytes(store):
 
 
 def test_session_manager_with_postgres_store():
-    """SessionManager works with PostgresSessionStore via protocol."""
+    """SessionManager works with SessionStore via protocol."""
     from nanobot.session.manager import Session, SessionManager
-    from nanobot.session.store_postgres import PostgresSessionStore
+    from nanobot.session.store import SessionStore
 
-    store = PostgresSessionStore(pg_url, pool_size=2)
+    store = SessionStore(pg_url, pool_size=2)
     # Clean slate
     with store._pool.connection() as conn:
         conn.execute("DELETE FROM turn_log")
