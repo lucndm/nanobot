@@ -264,6 +264,8 @@ class AgentLoop:
         *on_stream_end(resuming)*: called when a streaming session finishes.
         ``resuming=True`` means tool calls follow (spinner should restart);
         ``resuming=False`` means this is the final response.
+
+        After completion, metadata is available via ``self._last_run_metadata``.
         """
         loop_self = self
 
@@ -337,6 +339,12 @@ class AgentLoop:
             )
         )
         self._last_usage = result.usage
+        self._last_run_metadata: dict[str, Any] = {
+            "model": self.model,
+            "topic_name": topic_name,
+            "stop_reason": result.stop_reason,
+            "usage": result.usage,
+        }
         if result.stop_reason == "max_iterations":
             logger.warning("Max iterations ({}) reached", self.max_iterations)
         elif result.stop_reason == "error":
@@ -532,8 +540,14 @@ class AgentLoop:
                 message_thread_id=msg.metadata.get("message_thread_id"),
                 topic_name=msg.metadata.get("topic_name"),
             )
+            meta = self._last_run_metadata
             self._save_turn(
-                session, all_msgs, 1 + len(history), message_id=msg.metadata.get("message_id")
+                session, all_msgs, 1 + len(history),
+                message_id=msg.metadata.get("message_id"),
+                model=meta.get("model"),
+                topic_name=meta.get("topic_name"),
+                stop_reason=meta.get("stop_reason"),
+                usage=meta.get("usage"),
             )
             self.sessions.save(session)
             self._schedule_background(
@@ -616,8 +630,15 @@ class AgentLoop:
         if final_content is None:
             final_content = "I've completed processing but have no response to give."
 
+        meta = self._last_run_metadata
         self._save_turn(
-            session, all_msgs, 1 + len(history), message_id=msg.metadata.get("message_id")
+            session, all_msgs, 1 + len(history),
+            message_id=msg.metadata.get("message_id"),
+            model=meta.get("model"),
+            system_prompt_hash=system_prompt_hash,
+            topic_name=meta.get("topic_name"),
+            stop_reason=meta.get("stop_reason"),
+            usage=meta.get("usage"),
         )
         self.sessions.save(session)
         self._schedule_background(
@@ -686,7 +707,13 @@ class AgentLoop:
         return filtered
 
     def _save_turn(
-        self, session: Session, messages: list[dict], skip: int, *, message_id: str | None = None
+        self, session: Session, messages: list[dict], skip: int, *,
+        message_id: str | None = None,
+        model: str | None = None,
+        system_prompt_hash: str | None = None,
+        topic_name: str | None = None,
+        stop_reason: str | None = None,
+        usage: dict | None = None,
     ) -> None:
         """Save new-turn messages into session, truncating large tool results."""
         from datetime import datetime
@@ -722,6 +749,22 @@ class AgentLoop:
                     if not filtered:
                         continue
                     entry["content"] = filtered
+
+            # Attach rich metadata (stored by PostgresSessionStore)
+            if model:
+                entry["model"] = model
+            if system_prompt_hash:
+                entry["system_prompt_hash"] = system_prompt_hash
+            if topic_name:
+                entry["topic_name"] = topic_name
+            if stop_reason and role == "assistant":
+                entry["stop_reason"] = stop_reason
+            if usage and role == "assistant":
+                entry["prompt_tokens"] = usage.get("prompt_tokens", 0)
+                entry["completion_tokens"] = usage.get("completion_tokens", 0)
+                entry["cache_read_tokens"] = usage.get("cache_read_tokens", 0)
+                entry["cache_creation_tokens"] = usage.get("cache_creation_tokens", 0)
+
             entry.setdefault("timestamp", datetime.now().isoformat())
             session.messages.append(entry)
         session.updated_at = datetime.now()
