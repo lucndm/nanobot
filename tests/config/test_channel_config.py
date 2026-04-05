@@ -12,7 +12,7 @@ def test_channel_config_defaults():
     assert cfg.allow_from == ["*"]
     assert cfg.proxy is None
     assert cfg.reply_to_message is False
-    assert cfg.react_emoji == "👀"
+    assert cfg.react_emoji == ""
     assert cfg.group_policy == "mention"
     assert cfg.connection_pool_size == 32
     assert cfg.pool_timeout == 5.0
