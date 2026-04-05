@@ -120,6 +120,29 @@ def _markdown_to_telegram_html(text: str) -> str:
             li += 1
     text = "\n".join(rebuilt)
 
+    # 1.6. Auto-wrap box-drawing art in <pre> (╔═╗║┌─┐ etc.)
+    _BOX_CHARS_RE = re.compile(r"[╔╗╚╝║═╠╣╦╩╬┌┐└┘│─├┤┬┴┼▶◀►◄▸◂▴▾]")
+    lines = text.split("\n")
+    rebuilt: list[str] = []
+    li = 0
+    while li < len(lines):
+        # Don't re-wrap lines already inside a code block placeholder
+        if lines[li].startswith("\x00CB"):
+            rebuilt.append(lines[li])
+            li += 1
+            continue
+        if _BOX_CHARS_RE.search(lines[li]):
+            art_lines: list[str] = []
+            while li < len(lines) and not lines[li].startswith("\x00CB") and _BOX_CHARS_RE.search(lines[li]):
+                art_lines.append(lines[li])
+                li += 1
+            code_blocks.append("\n".join(art_lines))
+            rebuilt.append(f"\x00CB{len(code_blocks) - 1}\x00")
+        else:
+            rebuilt.append(lines[li])
+            li += 1
+    text = "\n".join(rebuilt)
+
     # 2. Extract and protect inline code
     inline_codes: list[str] = []
 
