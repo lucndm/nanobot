@@ -171,6 +171,12 @@ class LiteLLMConfig(Base):
     success_callback: list[str] = Field(default_factory=list)
     failure_callback: list[str] = Field(default_factory=list)
     mode: Literal["proxy", "direct"] | None = None
+    # litellm SDK features
+    num_retries: int = Field(default=2, ge=0, le=5)  # built-in retry on transient errors
+    timeout: int | None = Field(default=None, ge=1)  # per-request timeout in seconds
+    enable_prompt_caching: bool = False  # add cache_control markers for Anthropic/Gemini
+    allowed_fails: int = Field(default=3, ge=0)  # Router circuit breaker: fails before cooldown
+    cooldown_time: int = Field(default=60, ge=1)  # Router circuit breaker: cooldown seconds
 
     def model_post_init(self, __context: object) -> None:
         # Auto-detect mode: proxy if api_base set, direct if models configured, else proxy

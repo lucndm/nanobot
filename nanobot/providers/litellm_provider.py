@@ -38,6 +38,9 @@ class LiteLLMProvider(LLMProvider):
         self._proxy_available: bool = config.mode == "proxy"
         self._last_proxy_check: float = 0.0
         self._proxy_lock = asyncio.Lock()
+        self._num_retries = config.num_retries
+        self._timeout = config.timeout
+        self._enable_prompt_caching = config.enable_prompt_caching
 
         # Direct mode: initialize Router
         self._router: Router | None = None
@@ -46,6 +49,8 @@ class LiteLLMProvider(LLMProvider):
             self._router = Router(
                 model_list=model_list,
                 fallbacks=config.fallbacks or None,
+                allowed_fails=config.allowed_fails,
+                cooldown_time=config.cooldown_time,
             )
 
         # Register OTel callback
@@ -63,6 +68,9 @@ class LiteLLMProvider(LLMProvider):
         # Drop unsupported params (e.g. reasoning_effort for non-OpenAI models)
         litellm.drop_params = True
 
+        # Use litellm built-in retry instead of nanobot manual retry
+        litellm.num_retries = self._num_retries
+
     async def chat(
         self,
         messages: list[dict[str, Any]],
@@ -72,6 +80,7 @@ class LiteLLMProvider(LLMProvider):
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
         tool_choice: str | dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> LLMResponse:
         model = model or self._default_model
         kwargs: dict[str, Any] = dict(
@@ -84,6 +93,10 @@ class LiteLLMProvider(LLMProvider):
         )
         if reasoning_effort:
             kwargs["reasoning_effort"] = reasoning_effort
+        if metadata:
+            kwargs["metadata"] = metadata
+        if self._timeout:
+            kwargs["timeout"] = self._timeout
 
         return await self._do_chat(kwargs)
 
@@ -97,6 +110,7 @@ class LiteLLMProvider(LLMProvider):
         reasoning_effort: str | None = None,
         tool_choice: str | dict[str, Any] | None = None,
         on_content_delta: Callable[[str], Awaitable[None]] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> LLMResponse:
         model = model or self._default_model
         kwargs: dict[str, Any] = dict(
@@ -111,11 +125,20 @@ class LiteLLMProvider(LLMProvider):
         )
         if reasoning_effort:
             kwargs["reasoning_effort"] = reasoning_effort
+        if metadata:
+            kwargs["metadata"] = metadata
+        if self._timeout:
+            kwargs["timeout"] = self._timeout
 
         return await self._do_chat_stream(kwargs, on_content_delta)
 
     async def _do_chat(self, kwargs: dict[str, Any]) -> LLMResponse:
         """Execute a chat call with proxy->direct fallback."""
+        system_prompt, non_system_messages = self._extract_system_message(kwargs.pop("messages", []))
+        if system_prompt is not None:
+            kwargs["messages"] = non_system_messages
+            kwargs["system"] = self._apply_caching_markers(system_prompt)
+
         try:
             if self._mode == "proxy" and self._proxy_available:
                 response = await litellm.acompletion(
@@ -141,6 +164,11 @@ class LiteLLMProvider(LLMProvider):
         self, kwargs: dict[str, Any], on_content_delta: Callable | None
     ) -> LLMResponse:
         """Execute a streaming chat call with proxy->direct fallback."""
+        system_prompt, non_system_messages = self._extract_system_message(kwargs.pop("messages", []))
+        if system_prompt is not None:
+            kwargs["messages"] = non_system_messages
+            kwargs["system"] = self._apply_caching_markers(system_prompt)
+
         try:
             if self._mode == "proxy" and self._proxy_available:
                 response_stream = await litellm.acompletion(
@@ -222,6 +250,37 @@ class LiteLLMProvider(LLMProvider):
             finish_reason=finish_reason,
             usage=usage,
         )
+
+    @staticmethod
+    def _extract_system_message(
+        messages: list[dict[str, Any]],
+    ) -> tuple[str | None, list[dict[str, Any]]]:
+        """Extract the system message from the message list.
+
+        Returns (system_prompt, remaining_messages). System prompt is passed
+        separately to litellm's ``system`` param which enables provider-native
+        prompt caching (Anthropic, Gemini).
+        """
+        if messages and messages[0].get("role") == "system":
+            content = messages[0].get("content")
+            return (content if content else None, messages[1:])
+        return None, messages
+
+    def _apply_caching_markers(self, system_prompt: str) -> str | list[dict[str, Any]]:
+        """Wrap system prompt with cache_control markers for Anthropic/Gemini.
+
+        When ``enable_prompt_caching`` is True, the system prompt is converted
+        to a content block with ``cache_control: {"type": "ephemeral"}``.
+        """
+        if not self._enable_prompt_caching:
+            return system_prompt
+        return [
+            {
+                "type": "text",
+                "text": system_prompt,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
 
     def _parse_response(self, response) -> LLMResponse:
         """Convert litellm ModelResponse -> nanobot LLMResponse."""

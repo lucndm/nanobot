@@ -10,11 +10,15 @@ import pytest
 from nanobot.config.schema import LiteLLMConfig, LiteLLMModelConfig
 
 
-def _proxy_config():
-    return LiteLLMConfig(
+def _proxy_config(**overrides):
+    cfg = dict(
         api_base="http://localhost:4000",
         api_key="sk-proxy-key",
     )
+    cfg.update(overrides)
+    return LiteLLMConfig(**cfg)
+
+
 
 
 def _direct_config():
@@ -296,3 +300,202 @@ async def test_proxy_mode_passes_slashed_model_name_unchanged():
     assert call_kwargs["model"] == "minimax/MiniMax-M2.7"
     # custom_llm_provider prevents litellm from parsing provider prefix
     assert call_kwargs["custom_llm_provider"] == "openai"
+
+
+# --- System Prompt Extraction Tests ---
+
+
+@pytest.mark.asyncio
+async def test_extract_system_message_passed_as_system_param():
+    """System message must be extracted and passed via litellm's 'system' param."""
+    mock_acompletion = AsyncMock(return_value=_fake_response())
+
+    with patch("nanobot.providers.litellm_provider.litellm") as mock_litellm:
+        mock_litellm.acompletion = mock_acompletion
+        from nanobot.providers.litellm_provider import LiteLLMProvider
+
+        provider = LiteLLMProvider(_proxy_config(), "gpt-4o")
+        await provider.chat(
+            messages=[
+                {"role": "system", "content": "You are a helpful bot."},
+                {"role": "user", "content": "hi"},
+            ],
+        )
+
+    call_kwargs = mock_acompletion.call_args.kwargs
+    assert call_kwargs["system"] == "You are a helpful bot."
+    # System message must NOT be in messages list
+    assert all(m.get("role") != "system" for m in call_kwargs["messages"])
+
+
+@pytest.mark.asyncio
+async def test_no_system_message_no_system_param():
+    """When no system message exists, 'system' param must not be set."""
+    mock_acompletion = AsyncMock(return_value=_fake_response())
+
+    with patch("nanobot.providers.litellm_provider.litellm") as mock_litellm:
+        mock_litellm.acompletion = mock_acompletion
+        from nanobot.providers.litellm_provider import LiteLLMProvider
+
+        provider = LiteLLMProvider(_proxy_config(), "gpt-4o")
+        await provider.chat(messages=[{"role": "user", "content": "hi"}])
+
+    call_kwargs = mock_acompletion.call_args.kwargs
+    assert "system" not in call_kwargs
+
+
+# --- Metadata Pass-Through Tests ---
+
+
+@pytest.mark.asyncio
+async def test_metadata_passed_to_litellm():
+    """metadata dict must be forwarded to litellm.acompletion."""
+    mock_acompletion = AsyncMock(return_value=_fake_response())
+
+    with patch("nanobot.providers.litellm_provider.litellm") as mock_litellm:
+        mock_litellm.acompletion = mock_acompletion
+        from nanobot.providers.litellm_provider import LiteLLMProvider
+
+        provider = LiteLLMProvider(_proxy_config(), "gpt-4o")
+        await provider.chat(
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"channel": "telegram", "chat_id": "123", "topic_name": "finance"},
+        )
+
+    call_kwargs = mock_acompletion.call_args.kwargs
+    assert call_kwargs["metadata"]["channel"] == "telegram"
+    assert call_kwargs["metadata"]["chat_id"] == "123"
+    assert call_kwargs["metadata"]["topic_name"] == "finance"
+
+
+# --- Timeout Tests ---
+
+
+@pytest.mark.asyncio
+async def test_timeout_passed_to_litellm():
+    """Configured timeout must be passed to litellm.acompletion."""
+    mock_acompletion = AsyncMock(return_value=_fake_response())
+
+    with patch("nanobot.providers.litellm_provider.litellm") as mock_litellm:
+        mock_litellm.acompletion = mock_acompletion
+        from nanobot.providers.litellm_provider import LiteLLMProvider
+
+        provider = LiteLLMProvider(_proxy_config(timeout=30), "gpt-4o")
+        await provider.chat(messages=[{"role": "user", "content": "hi"}])
+
+    call_kwargs = mock_acompletion.call_args.kwargs
+    assert call_kwargs["timeout"] == 30
+
+
+@pytest.mark.asyncio
+async def test_no_timeout_by_default():
+    """Timeout must not be passed when not configured."""
+    mock_acompletion = AsyncMock(return_value=_fake_response())
+
+    with patch("nanobot.providers.litellm_provider.litellm") as mock_litellm:
+        mock_litellm.acompletion = mock_acompletion
+        from nanobot.providers.litellm_provider import LiteLLMProvider
+
+        provider = LiteLLMProvider(_proxy_config(), "gpt-4o")
+        await provider.chat(messages=[{"role": "user", "content": "hi"}])
+
+    call_kwargs = mock_acompletion.call_args.kwargs
+    assert "timeout" not in call_kwargs
+
+
+# --- num_retries Tests ---
+
+
+@pytest.mark.asyncio
+async def test_init_sets_num_retries():
+    """LiteLLMProvider.__init__ must set litellm.num_retries from config."""
+    with patch("nanobot.providers.litellm_provider.litellm") as mock_litellm:
+        from nanobot.providers.litellm_provider import LiteLLMProvider
+
+        LiteLLMProvider(_proxy_config(num_retries=3), "gpt-4o")
+
+    assert mock_litellm.num_retries == 3
+
+
+# --- Prompt Caching Markers Tests ---
+
+
+@pytest.mark.asyncio
+async def test_prompt_caching_disabled_by_default():
+    """When enable_prompt_caching is False, system param is a plain string."""
+    mock_acompletion = AsyncMock(return_value=_fake_response())
+
+    with patch("nanobot.providers.litellm_provider.litellm") as mock_litellm:
+        mock_litellm.acompletion = mock_acompletion
+        from nanobot.providers.litellm_provider import LiteLLMProvider
+
+        provider = LiteLLMProvider(_proxy_config(), "gpt-4o")
+        await provider.chat(
+            messages=[
+                {"role": "system", "content": "You are a bot."},
+                {"role": "user", "content": "hi"},
+            ],
+        )
+
+    call_kwargs = mock_acompletion.call_args.kwargs
+    assert isinstance(call_kwargs["system"], str)
+
+
+@pytest.mark.asyncio
+async def test_prompt_caching_enabled_adds_cache_control():
+    """When enable_prompt_caching is True, system param must be a list with cache_control."""
+    mock_acompletion = AsyncMock(return_value=_fake_response())
+
+    with patch("nanobot.providers.litellm_provider.litellm") as mock_litellm:
+        mock_litellm.acompletion = mock_acompletion
+        from nanobot.providers.litellm_provider import LiteLLMProvider
+
+        provider = LiteLLMProvider(_proxy_config(enable_prompt_caching=True), "gpt-4o")
+        await provider.chat(
+            messages=[
+                {"role": "system", "content": "You are a bot."},
+                {"role": "user", "content": "hi"},
+            ],
+        )
+
+    call_kwargs = mock_acompletion.call_args.kwargs
+    assert isinstance(call_kwargs["system"], list)
+    assert len(call_kwargs["system"]) == 1
+    block = call_kwargs["system"][0]
+    assert block["type"] == "text"
+    assert block["text"] == "You are a bot."
+    assert block["cache_control"] == {"type": "ephemeral"}
+
+
+# --- Router Circuit Breaker Tests ---
+
+
+@pytest.mark.asyncio
+async def test_router_receives_circuit_breaker_params():
+    """Router must be initialized with allowed_fails and cooldown_time from config."""
+    mock_router = MagicMock()
+
+    with (
+        patch("nanobot.providers.litellm_provider.litellm"),
+        patch("nanobot.providers.litellm_provider.Router", return_value=mock_router) as mock_router_cls,
+    ):
+        from nanobot.providers.litellm_provider import LiteLLMProvider
+
+        LiteLLMProvider(
+            LiteLLMConfig(
+                models=[
+                    LiteLLMModelConfig(
+                        model_name="gpt-4o",
+                        litellm_params={"model": "openai/gpt-4o", "api_key": "sk-test"},
+                    )
+                ],
+                allowed_fails=5,
+                cooldown_time=120,
+            ),
+            "gpt-4o",
+        )
+
+    mock_router_cls.assert_called_once()
+    call_kwargs = mock_router_cls.call_args.kwargs
+    assert call_kwargs["allowed_fails"] == 5
+    assert call_kwargs["cooldown_time"] == 120

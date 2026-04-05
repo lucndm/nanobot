@@ -33,6 +33,8 @@ class AgentRunSpec:
     error_message: str | None = _DEFAULT_ERROR_MESSAGE
     max_iterations_message: str | None = None
     channel: str = ""
+    chat_id: str = ""
+    topic_name: str | None = None
     concurrent_tools: bool = False
     fail_on_tool_error: bool = False
 
@@ -69,6 +71,16 @@ class AgentRunner:
         for iteration in range(spec.max_iterations):
             context = AgentHookContext(iteration=iteration, messages=messages)
             await hook.before_iteration(context)
+
+            # Build litellm metadata from request context
+            metadata: dict[str, Any] = {}
+            if spec.channel:
+                metadata["channel"] = spec.channel
+            if spec.chat_id:
+                metadata["chat_id"] = spec.chat_id
+            if spec.topic_name:
+                metadata["topic_name"] = spec.topic_name
+
             kwargs: dict[str, Any] = {
                 "messages": messages,
                 "tools": spec.tools.get_definitions(),
@@ -80,6 +92,8 @@ class AgentRunner:
                 kwargs["max_tokens"] = spec.max_tokens
             if spec.reasoning_effort is not None:
                 kwargs["reasoning_effort"] = spec.reasoning_effort
+            if metadata:
+                kwargs["metadata"] = metadata
 
             try:
                 if hook.wants_streaming():

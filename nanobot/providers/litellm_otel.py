@@ -55,11 +55,17 @@ class OTelCallback:
         self, kwargs: dict, response_obj, start_time: datetime, end_time: datetime
     ) -> None:
         model = kwargs.get("model", "unknown")
+        metadata = kwargs.get("metadata") or {}
+        attributes: dict[str, str] = {"model": model}
+        for key in ("channel", "chat_id", "topic_name"):
+            val = metadata.get(key)
+            if val:
+                attributes[key] = val
         duration_ms = (end_time - start_time).total_seconds() * 1000
 
         try:
             if self._duration:
-                self._duration.record(duration_ms, attributes={"model": model})
+                self._duration.record(duration_ms, attributes=attributes)
         except Exception:
             logger.debug("OTelCallback: failed to record duration")
 
@@ -70,7 +76,7 @@ class OTelCallback:
         try:
             if self._prompt_tokens:
                 self._prompt_tokens.add(
-                    prompt_tokens, attributes={"model": model, "type": "prompt"}
+                    prompt_tokens, attributes={**attributes, "type": "prompt"}
                 )
         except Exception:
             logger.debug("OTelCallback: failed to record prompt tokens")
@@ -78,7 +84,7 @@ class OTelCallback:
         try:
             if self._completion_tokens:
                 self._completion_tokens.add(
-                    completion_tokens, attributes={"model": model, "type": "completion"}
+                    completion_tokens, attributes={**attributes, "type": "completion"}
                 )
         except Exception:
             logger.debug("OTelCallback: failed to record completion tokens")
@@ -87,10 +93,16 @@ class OTelCallback:
         self, kwargs: dict, response_obj, start_time: datetime, end_time: datetime
     ) -> None:
         model = kwargs.get("model", "unknown")
+        metadata = kwargs.get("metadata") or {}
         error_type = type(response_obj).__name__ if response_obj else "unknown"
+        attributes: dict[str, str] = {"model": model, "error_type": error_type}
+        for key in ("channel", "chat_id", "topic_name"):
+            val = metadata.get(key)
+            if val:
+                attributes[key] = val
 
         try:
             if self._errors:
-                self._errors.add(1, attributes={"model": model, "error_type": error_type})
+                self._errors.add(1, attributes=attributes)
         except Exception:
             logger.debug("OTelCallback: failed to record error")

@@ -328,6 +328,8 @@ class AgentLoop:
                 hook=hook,
                 error_message="Sorry, I encountered an error calling the AI model.",
                 channel=channel,
+                chat_id=chat_id,
+                topic_name=topic_name,
                 concurrent_tools=True,
             )
         )
