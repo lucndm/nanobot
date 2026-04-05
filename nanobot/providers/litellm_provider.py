@@ -231,6 +231,10 @@ class LiteLLMProvider(LLMProvider):
                     "completion_tokens": getattr(chunk.usage, "completion_tokens", 0) or 0,
                     "total_tokens": getattr(chunk.usage, "total_tokens", 0) or 0,
                 }
+                details = getattr(chunk.usage, "prompt_tokens_details", None)
+                if details:
+                    usage["cache_read_tokens"] = getattr(details, "cache_read_input_tokens", 0) or 0
+                    usage["cache_creation_tokens"] = getattr(details, "cache_creation_input_tokens", 0) or 0
 
         content = "".join(content_parts) or None
         tool_calls: list[ToolCallRequest] = []
@@ -305,6 +309,10 @@ class LiteLLMProvider(LLMProvider):
                 "completion_tokens": response.usage.completion_tokens or 0,
                 "total_tokens": response.usage.total_tokens or 0,
             }
+            details = getattr(response.usage, "prompt_tokens_details", None)
+            if details:
+                usage["cache_read_tokens"] = getattr(details, "cache_read_input_tokens", 0) or 0
+                usage["cache_creation_tokens"] = getattr(details, "cache_creation_input_tokens", 0) or 0
 
         thinking_blocks = None
         if hasattr(message, "thinking") and message.thinking:

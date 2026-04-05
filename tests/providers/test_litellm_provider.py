@@ -82,7 +82,9 @@ async def test_parse_simple_response():
     assert parsed.content == "Hello world"
     assert parsed.finish_reason == "stop"
     assert not parsed.has_tool_calls
-    assert parsed.usage == {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+    assert parsed.usage["prompt_tokens"] == 10
+    assert parsed.usage["completion_tokens"] == 5
+    assert parsed.usage["total_tokens"] == 15
 
 
 @pytest.mark.asyncio
@@ -499,3 +501,22 @@ async def test_router_receives_circuit_breaker_params():
     call_kwargs = mock_router_cls.call_args.kwargs
     assert call_kwargs["allowed_fails"] == 5
     assert call_kwargs["cooldown_time"] == 120
+
+
+@pytest.mark.asyncio
+async def test_parse_response_extracts_cache_tokens():
+    """_parse_response must extract cache_read and cache_creation tokens."""
+    resp = _fake_response()
+    details = MagicMock()
+    details.cache_read_input_tokens = 500
+    details.cache_creation_input_tokens = 200
+    resp.usage.prompt_tokens_details = details
+
+    with patch("nanobot.providers.litellm_provider.litellm"):
+        from nanobot.providers.litellm_provider import LiteLLMProvider
+
+        provider = LiteLLMProvider(_proxy_config(), "gpt-4o")
+        parsed = provider._parse_response(resp)
+
+    assert parsed.usage["cache_read_tokens"] == 500
+    assert parsed.usage["cache_creation_tokens"] == 200
