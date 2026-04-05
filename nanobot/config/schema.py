@@ -141,12 +141,10 @@ class OtelConfig(Base):
 
 
 class DatabaseConfig(Base):
-    """Database backend configuration."""
+    """Database configuration."""
 
-    backend: Literal["sqlite", "postgres"] = "sqlite"
     url: str = ""
     pool_size: int = 5
-    sqlite_path: str = "data/memories.db"
 
 
 class LiteLLMModelConfig(Base):
