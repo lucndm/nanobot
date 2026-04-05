@@ -210,3 +210,65 @@ class TestTopicMapping:
         store.set_topic_mapping(-9999999999, 4, "Other Chat Topic")
         assert store.get_topic_mapping(-1003738155502, 4) == "Finance"
         assert store.get_topic_mapping(-9999999999, 4) == "Other Chat Topic"
+
+
+class TestTopicLitellm:
+    def test_set_and_get_topic_litellm(self, tmp_path: Path):
+        from nanobot.agent.store_sqlite import SqliteMemoryStore
+        store = SqliteMemoryStore(tmp_path)
+        store.set_topic_litellm("my-topic", "test/model", 0.7, 4096)
+        result = store.get_topic_litellm("my-topic")
+        assert result is not None
+        assert result == ("test/model", 0.7, 4096)
+
+    def test_get_topic_litellm_missing_returns_none(self, tmp_path: Path):
+        from nanobot.agent.store_sqlite import SqliteMemoryStore
+        store = SqliteMemoryStore(tmp_path)
+        result = store.get_topic_litellm("nonexistent")
+        assert result is None
+
+    def test_set_topic_litellm_upserts(self, tmp_path: Path):
+        from nanobot.agent.store_sqlite import SqliteMemoryStore
+        store = SqliteMemoryStore(tmp_path)
+        store.set_topic_litellm("my-topic", "old/model", 0.5, 2048)
+        store.set_topic_litellm("my-topic", "new/model", 0.9, 8192)
+        result = store.get_topic_litellm("my-topic")
+        assert result == ("new/model", 0.9, 8192)
+
+    def test_delete_topic_litellm(self, tmp_path: Path):
+        from nanobot.agent.store_sqlite import SqliteMemoryStore
+        store = SqliteMemoryStore(tmp_path)
+        store.set_topic_litellm("my-topic", "test/model", 0.7, 4096)
+        store.delete_topic_litellm("my-topic")
+        result = store.get_topic_litellm("my-topic")
+        assert result is None
+
+
+class TestTopicLitellmSync:
+    def test_sync_creates_topic_md_from_store(self, tmp_path: Path):
+        from nanobot.agent.store_sqlite import SqliteMemoryStore
+        store = SqliteMemoryStore(tmp_path)
+        store.set_topic_litellm("my-topic", "test/model", 0.7, 4096)
+
+        store.sync_topic_files(tmp_path)
+
+        topic_file = tmp_path / "topics" / "my-topic" / "TOPIC.md"
+        assert topic_file.exists()
+        content = topic_file.read_text()
+        assert "test/model" in content
+
+    def test_sync_imports_orphan_topic_files(self, tmp_path: Path):
+        from nanobot.agent.store_sqlite import SqliteMemoryStore
+        store = SqliteMemoryStore(tmp_path)
+
+        topic_dir = tmp_path / "topics" / "orphan-topic"
+        topic_dir.mkdir(parents=True)
+        (topic_dir / "TOPIC.md").write_text(
+            "# Topic: orphan-topic\n\n## litellm\nmodel: orphan/model\ntemperature: 0.5\nmax_tokens: 2048\n"
+        )
+
+        store.sync_topic_files(tmp_path)
+
+        result = store.get_topic_litellm("orphan-topic")
+        assert result is not None
+        assert result[0] == "orphan/model"

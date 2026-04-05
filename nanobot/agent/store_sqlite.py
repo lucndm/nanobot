@@ -126,6 +126,15 @@ class SqliteMemoryStore:
                 topic_name TEXT NOT NULL,
                 updated_at TEXT NOT NULL DEFAULT (datetime('now')),
                 PRIMARY KEY (chat_id, thread_id))""")
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS topic_litellm ("
+                "  topic_name TEXT PRIMARY KEY,"
+                "  model TEXT NOT NULL,"
+                "  temperature REAL NOT NULL,"
+                "  max_tokens INTEGER NOT NULL,"
+                "  updated_at TEXT"
+                ")"
+            )
 
     def read_long_term(self) -> str:
         with self._conn() as conn:
@@ -238,6 +247,78 @@ class SqliteMemoryStore:
                 "SELECT chat_id, thread_id, topic_name FROM topic_mapping"
             ).fetchall()
         return {(r[0], r[1]): r[2] for r in rows}
+
+    # ── Topic Litellm Config ────────────────────────────────────
+
+    def get_topic_litellm(self, topic_name: str) -> tuple[str, float, int] | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT model, temperature, max_tokens FROM topic_litellm WHERE topic_name = ?",
+                (topic_name,),
+            ).fetchone()
+        return tuple(row) if row else None
+
+    def set_topic_litellm(
+        self, topic_name: str, model: str, temperature: float, max_tokens: int
+    ) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO topic_litellm (topic_name, model, temperature, max_tokens, updated_at) "
+                "VALUES (?, ?, ?, ?, datetime('now')) "
+                "ON CONFLICT(topic_name) DO UPDATE "
+                "SET model=excluded.model, temperature=excluded.temperature, "
+                "max_tokens=excluded.max_tokens, updated_at=excluded.updated_at",
+                (topic_name, model, temperature, max_tokens),
+            )
+
+    def delete_topic_litellm(self, topic_name: str) -> None:
+        with self._conn() as conn:
+            conn.execute("DELETE FROM topic_litellm WHERE topic_name = ?", (topic_name,))
+
+    def _list_topic_litellm(self) -> list[tuple[str, str, float, int]]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT topic_name, model, temperature, max_tokens FROM topic_litellm"
+            ).fetchall()
+        return [(r[0], r[1], r[2], r[3]) for r in rows]
+
+    def sync_topic_files(self, workspace: Path) -> None:
+        """Reconcile topic_litellm store with TOPIC.md files on disk."""
+        from nanobot.agent.topic_config import parse_topic_config
+
+        topics_dir = workspace / "topics"
+        if not topics_dir.exists():
+            return
+
+        # Import orphan files: TOPIC.md exists but no store entry
+        for topic_dir in topics_dir.iterdir():
+            if not topic_dir.is_dir():
+                continue
+            topic_file = topic_dir / "TOPIC.md"
+            if not topic_file.exists():
+                continue
+            topic_name = topic_dir.name
+            existing = self.get_topic_litellm(topic_name)
+            if existing is None:
+                content = topic_file.read_text(encoding="utf-8")
+                config = parse_topic_config(content)
+                if config and config.model:
+                    self.set_topic_litellm(
+                        topic_name,
+                        config.model,
+                        config.temperature if config.temperature is not None else 0.7,
+                        config.max_tokens if config.max_tokens is not None else 4096,
+                    )
+
+        # Rebuild missing files: store has entry but no TOPIC.md
+        for topic_name, model, temp, tokens in self._list_topic_litellm():
+            topic_file = topics_dir / topic_name / "TOPIC.md"
+            if not topic_file.exists():
+                topic_file.parent.mkdir(parents=True, exist_ok=True)
+                topic_file.write_text(
+                    f"# Topic: {topic_name}\n\n## litellm\nmodel: {model}\ntemperature: {temp}\nmax_tokens: {tokens}\n",
+                    encoding="utf-8",
+                )
 
     # ── Reactions ──────────────────────────────────────────────────
 

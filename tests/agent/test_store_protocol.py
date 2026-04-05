@@ -87,3 +87,26 @@ def test_sqlite_store_emoji_sentiment(tmp_path: Path):
     store.learn_emoji("🤷", "neutral")
     assert store.resolve_emoji_sentiment("🤷") == "neutral"
     assert store.is_emoji_known("🤷") is True
+
+
+def test_sqlite_store_topic_litellm_crud(tmp_path: Path):
+    """Verify topic litellm config CRUD works correctly."""
+    store = SqliteMemoryStore(tmp_path)
+
+    # Set and get
+    store.set_topic_litellm("my-topic", "test/model", 0.7, 4096)
+    assert store.get_topic_litellm("my-topic") == ("test/model", 0.7, 4096)
+
+    # Update
+    store.set_topic_litellm("my-topic", "new/model", 0.9, 8192)
+    assert store.get_topic_litellm("my-topic") == ("new/model", 0.9, 8192)
+
+    # Delete
+    store.delete_topic_litellm("my-topic")
+    assert store.get_topic_litellm("my-topic") is None
+
+
+def test_sqlite_store_topic_litellm_missing_returns_none(tmp_path: Path):
+    """Verify get_topic_litellm returns None for nonexistent topics."""
+    store = SqliteMemoryStore(tmp_path)
+    assert store.get_topic_litellm("nonexistent") is None

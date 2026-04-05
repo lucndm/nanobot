@@ -34,6 +34,16 @@ class MemoryStoreProtocol(Protocol):
     def delete_topic_mapping(self, chat_id: int, thread_id: int) -> None: ...
     def load_all_topic_mappings(self) -> dict[tuple[int, int], str]: ...
 
+    # -- Topic Litellm Config --
+
+    def get_topic_litellm(self, topic_name: str) -> tuple[str, float, int] | None: ...
+
+    def set_topic_litellm(
+        self, topic_name: str, model: str, temperature: float, max_tokens: int
+    ) -> None: ...
+
+    def delete_topic_litellm(self, topic_name: str) -> None: ...
+
     # -- Reactions & Sentiment --
 
     def record_reaction(
