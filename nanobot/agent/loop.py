@@ -878,7 +878,7 @@ class AgentLoop:
         )
         if isinstance(probe_messages, dict):
             probe_messages = probe_messages["messages"]
-        estimated = estimate_prompt_tokens_chain(
+        estimated, _source = estimate_prompt_tokens_chain(
             self.provider, self.model, probe_messages, self.tools.get_definitions()
         )
         if estimated <= 0 or estimated < budget:
@@ -938,7 +938,7 @@ class AgentLoop:
             )
             if isinstance(probe_messages, dict):
                 probe_messages = probe_messages["messages"]
-            estimated = estimate_prompt_tokens_chain(
+            estimated, _source = estimate_prompt_tokens_chain(
                 self.provider, self.model, probe_messages, self.tools.get_definitions()
             )
             if estimated <= 0:
