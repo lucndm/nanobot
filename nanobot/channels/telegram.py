@@ -360,6 +360,10 @@ class TelegramChannel(BaseChannel):
         self._preload_topic_mappings()
         self._migrate_topic_id_from_files()
 
+        # Sync topic_litellm store with TOPIC.md files on disk
+        if self._topic_store and self.workspace:
+            self._topic_store.sync_topic_files(self.workspace)
+
         await self._app.start()
 
         # Get bot info and register command menu
