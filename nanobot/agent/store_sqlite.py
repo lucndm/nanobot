@@ -287,28 +287,27 @@ class SqliteMemoryStore:
         from nanobot.agent.topic_config import parse_topic_config
 
         topics_dir = workspace / "topics"
-        if not topics_dir.exists():
-            return
 
         # Import orphan files: TOPIC.md exists but no store entry
-        for topic_dir in topics_dir.iterdir():
-            if not topic_dir.is_dir():
-                continue
-            topic_file = topic_dir / "TOPIC.md"
-            if not topic_file.exists():
-                continue
-            topic_name = topic_dir.name
-            existing = self.get_topic_litellm(topic_name)
-            if existing is None:
-                content = topic_file.read_text(encoding="utf-8")
-                config = parse_topic_config(content)
-                if config and config.model:
-                    self.set_topic_litellm(
-                        topic_name,
-                        config.model,
-                        config.temperature if config.temperature is not None else 0.7,
-                        config.max_tokens if config.max_tokens is not None else 4096,
-                    )
+        if topics_dir.exists():
+            for topic_dir in topics_dir.iterdir():
+                if not topic_dir.is_dir():
+                    continue
+                topic_file = topic_dir / "TOPIC.md"
+                if not topic_file.exists():
+                    continue
+                topic_name = topic_dir.name
+                existing = self.get_topic_litellm(topic_name)
+                if existing is None:
+                    content = topic_file.read_text(encoding="utf-8")
+                    config = parse_topic_config(content)
+                    if config and config.model:
+                        self.set_topic_litellm(
+                            topic_name,
+                            config.model,
+                            config.temperature if config.temperature is not None else 0.7,
+                            config.max_tokens if config.max_tokens is not None else 4096,
+                        )
 
         # Rebuild missing files: store has entry but no TOPIC.md
         for topic_name, model, temp, tokens in self._list_topic_litellm():
