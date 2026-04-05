@@ -13,7 +13,8 @@ class TestTopicEndToEnd:
         """Full flow: TOPIC.md → parse → TopicConfig → AgentRunSpec overrides."""
         from nanobot.agent.context import ContextBuilder
 
-        topic_dir = tmp_path / "topics" / "finance"
+        # Folder structure: topics/<chat_id>/<thread_id>/TOPIC.md
+        topic_dir = tmp_path / "topics" / "123" / "456"
         topic_dir.mkdir(parents=True)
         (topic_dir / "TOPIC.md").write_text(
             "# Topic: finance\n\n"
@@ -35,12 +36,12 @@ class TestTopicEndToEnd:
 
             ctx = ContextBuilder(workspace=tmp_path)
 
-        rules = ctx.load_topic_rules("finance")
+        rules = ctx.load_topic_rules("finance", chat_id=123, thread_id=456)
         assert rules is not None
         assert "## purpose" in rules
         assert "## litellm" in rules
 
-        config = ctx.get_topic_config("finance")
+        config = ctx.get_topic_config("finance", chat_id=123, thread_id=456)
         assert config is not None
         assert config.model == "anthropic/claude-3-5-haiku-20241007"
         assert config.temperature == 0.7
@@ -50,7 +51,7 @@ class TestTopicEndToEnd:
         """Topic with no litellm section should return None config."""
         from nanobot.agent.context import ContextBuilder
 
-        topic_dir = tmp_path / "topics" / "plain"
+        topic_dir = tmp_path / "topics" / "123" / "456"
         topic_dir.mkdir(parents=True)
         (topic_dir / "TOPIC.md").write_text(
             "# Topic: plain\n\n## purpose\nGeneral chat\n\n## rules\nBe helpful\n"
@@ -66,16 +67,16 @@ class TestTopicEndToEnd:
 
             ctx = ContextBuilder(workspace=tmp_path)
 
-        rules = ctx.load_topic_rules("plain")
+        rules = ctx.load_topic_rules("plain", chat_id=123, thread_id=456)
         assert rules is not None
-        config = ctx.get_topic_config("plain")
+        config = ctx.get_topic_config("plain", chat_id=123, thread_id=456)
         assert config is None
 
     def test_cache_invalidation_after_update(self, tmp_path):
         """Updating TOPIC.md and invalidating cache should reflect new config."""
         from nanobot.agent.context import ContextBuilder
 
-        topic_dir = tmp_path / "topics" / "dynamic"
+        topic_dir = tmp_path / "topics" / "123" / "456"
         topic_dir.mkdir(parents=True)
         (topic_dir / "TOPIC.md").write_text("## litellm\nmodel: old/model\n")
 
@@ -89,11 +90,11 @@ class TestTopicEndToEnd:
 
             ctx = ContextBuilder(workspace=tmp_path)
 
-        config1 = ctx.get_topic_config("dynamic")
+        config1 = ctx.get_topic_config("dynamic", chat_id=123, thread_id=456)
         assert config1.model == "old/model"
 
         (topic_dir / "TOPIC.md").write_text("## litellm\nmodel: new/model\n")
-        ctx.invalidate_topic_cache("dynamic")
+        ctx.invalidate_topic_cache(chat_id=123, thread_id=456)
 
-        config2 = ctx.get_topic_config("dynamic")
+        config2 = ctx.get_topic_config("dynamic", chat_id=123, thread_id=456)
         assert config2.model == "new/model"

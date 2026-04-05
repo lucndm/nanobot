@@ -31,6 +31,8 @@ class TestBuildSystemPromptWithTopicConfigured:
             topic_name="finance",
             topic_resolved=True,
             topic_configured=False,
+            chat_id=123,
+            thread_id=456,
         )
         # Should contain setup prompt for unconfigured topic
         assert "topic" in prompt.lower()
@@ -39,7 +41,7 @@ class TestBuildSystemPromptWithTopicConfigured:
 
     def test_configured_topic_injects_rules(self, tmp_path):
         """When topic is configured, system prompt injects TOPIC.md rules."""
-        topic_dir = tmp_path / "topics" / "finance"
+        topic_dir = tmp_path / "topics" / "123" / "456"
         topic_dir.mkdir(parents=True)
         (topic_dir / "TOPIC.md").write_text(
             "# Topic: finance\n\n## purpose\nBudget tracking\n\n## rules\nBe precise.\n"
@@ -51,6 +53,8 @@ class TestBuildSystemPromptWithTopicConfigured:
             topic_name="finance",
             topic_resolved=True,
             topic_configured=True,
+            chat_id=123,
+            thread_id=456,
         )
         assert "finance" in prompt.lower()
         assert "Budget tracking" in prompt
@@ -64,6 +68,8 @@ class TestBuildSystemPromptWithTopicConfigured:
             topic_name=None,
             topic_resolved=False,
             topic_configured=True,
+            chat_id=123,
+            thread_id=456,
         )
         # Should not crash or contain topic setup prompt
         assert "# Topic Rules" not in prompt
@@ -77,5 +83,7 @@ class TestBuildSystemPromptWithTopicConfigured:
             topic_name=None,
             topic_resolved=False,
             topic_configured=False,
+            chat_id=123,
+            thread_id=456,
         )
         assert "Which topic" in prompt

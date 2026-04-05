@@ -33,51 +33,58 @@ class ContextBuilder:
         self._on_skills_loaded = on_skills_loaded
         self.memory: MemoryStoreProtocol = SqliteMemoryStore(workspace)
         self.skills = SkillsLoader(workspace)
-        self._topic_rules_cache: dict[str, str] = {}
+        self._topic_rules_cache: dict[tuple[int, int], str] = {}
 
-    def load_topic_rules(self, topic_name: str | None) -> str | None:
-        """Load topic-specific rules from workspace/topics/{topic_name}/TOPIC.md.
+    def load_topic_rules(
+        self, topic_name: str | None, chat_id: int | None, thread_id: int | None
+    ) -> str | None:
+        """Load topic rules from workspace/topics/{chat_id}/{thread_id}/TOPIC.md.
 
         Results are cached in memory for the lifetime of the process.
-        Returns None if no topic rules file exists.
+        Returns None if no topic rules file exists or if chat_id/thread_id are None.
         """
-        if not topic_name:
-            logger.debug("No topic_name, skipping topic rules")
+        if chat_id is None or thread_id is None:
+            logger.debug("No chat_id/thread_id, skipping topic rules")
             return None
 
-        # Normalize: lowercase, replace spaces/special chars with hyphens
-        key = topic_name.lower().replace(" ", "-").replace("_", "-").strip("-")
+        cache_key = (chat_id, thread_id)
+        if cache_key in self._topic_rules_cache:
+            return self._topic_rules_cache[cache_key]
 
-        if key in self._topic_rules_cache:
-            return self._topic_rules_cache[key]
-
-        topics_dir = self.workspace / "topics"
-        topic_file = topics_dir / key / "TOPIC.md"
+        topic_file = self.workspace / "topics" / str(chat_id) / str(thread_id) / "TOPIC.md"
 
         if topic_file.exists():
             try:
                 content = topic_file.read_text(encoding="utf-8")
-                self._topic_rules_cache[key] = content
-                logger.info("Loaded topic rules: {} -> {}", key, topic_file)
+                self._topic_rules_cache[cache_key] = content
+                logger.info("Loaded topic rules: {}/{} -> {}", chat_id, thread_id, topic_file)
                 return content
             except Exception as e:
-                logger.warning("Failed to load topic rules for {}: {}", key, e)
+                logger.warning("Failed to load topic rules for {}/{}: {}", chat_id, thread_id, e)
                 return None
 
-        logger.warning("Topic '{}' resolved but no TOPIC.md at {}", topic_name, topic_file)
+        logger.warning(
+            "Topic '{}' resolved but no TOPIC.md at {}/{}/TOPIC.md",
+            topic_name,
+            chat_id,
+            thread_id,
+        )
         return None
 
-    def invalidate_topic_cache(self, topic_name: str | None = None) -> None:
-        """Invalidate topic rules cache. If topic_name is None, clear all."""
-        if topic_name is None:
+    def invalidate_topic_cache(
+        self, chat_id: int | None = None, thread_id: int | None = None
+    ) -> None:
+        """Invalidate topic rules cache. If chat_id/thread_id are None, clear all."""
+        if chat_id is None or thread_id is None:
             self._topic_rules_cache.clear()
         else:
-            key = topic_name.lower().replace(" ", "-").replace("_", "-").strip("-")
-            self._topic_rules_cache.pop(key, None)
+            self._topic_rules_cache.pop((chat_id, thread_id), None)
 
-    def get_topic_config(self, topic_name: str | None) -> TopicConfig | None:
+    def get_topic_config(
+        self, topic_name: str | None, chat_id: int | None, thread_id: int | None
+    ) -> TopicConfig | None:
         """Extract TopicConfig from the topic's TOPIC.md litellm section."""
-        content = self.load_topic_rules(topic_name)
+        content = self.load_topic_rules(topic_name, chat_id, thread_id)
         if content is None:
             return None
         return parse_topic_config(content)
@@ -89,6 +96,8 @@ class ContextBuilder:
         topic_name: str | None = None,
         topic_resolved: bool = True,
         topic_configured: bool = True,
+        chat_id: int | None = None,
+        thread_id: int | None = None,
     ) -> str:
         """Build the system prompt from identity, bootstrap files, memory, skills, and topic rules.
 
@@ -99,6 +108,8 @@ class ContextBuilder:
                 the user which topic they are in.
             topic_configured: False when a topic name is resolved but no TOPIC.md
                 file exists. The bot is instructed to ask the user to set up the topic.
+            chat_id: Required for TOPIC.md path (topics/<chat_id>/<thread_id>/TOPIC.md).
+            thread_id: Required for TOPIC.md path.
         """
         parts = [self._get_identity()]
 
@@ -149,15 +160,20 @@ Skills with available="false" need dependencies installed first - you can try in
         # Inject topic-specific rules (highest priority — last in prompt)
         if topic_name and topic_resolved and not topic_configured:
             # Topic name is known but no TOPIC.md exists — prompt user to set it up
+            path_hint = (
+                f"topics/{chat_id}/{thread_id}/TOPIC.md"
+                if chat_id is not None and thread_id is not None
+                else "topics/<chat_id>/<thread_id>/TOPIC.md"
+            )
             parts.append(
                 "# Unconfigured Topic\n"
                 "The user is in a topic that hasn't been set up yet. "
                 "Ask them what this topic is for, then create a TOPIC.md file "
-                f"at workspace/topics/{topic_name.lower().replace(' ', '-')}/TOPIC.md "
+                f"at workspace/{path_hint} "
                 "using the write_file tool."
             )
         elif topic_resolved:
-            topic_rules = self.load_topic_rules(topic_name)
+            topic_rules = self.load_topic_rules(topic_name, chat_id, thread_id)
             if topic_rules:
                 parts.append(f"# Topic Rules ({topic_name})\n\n{topic_rules}")
         else:
@@ -252,6 +268,7 @@ IMPORTANT: To send files (images, documents, audio, video) to the user, you MUST
         topic_name: str | None = None,
         topic_resolved: bool = True,
         topic_configured: bool = True,
+        thread_id: int | None = None,
     ) -> dict[str, Any]:
         """Build the complete message list for an LLM call.
 
@@ -269,8 +286,22 @@ IMPORTANT: To send files (images, documents, audio, video) to the user, you MUST
         else:
             merged = [{"type": "text", "text": runtime_ctx}] + user_content
 
+        # Convert chat_id to int for file path construction
+        chat_id_int: int | None = None
+        if chat_id is not None:
+            try:
+                chat_id_int = int(chat_id)
+            except (ValueError, TypeError):
+                pass
+
         system_prompt = self.build_system_prompt(
-            skill_names, user_mood, topic_name, topic_resolved, topic_configured
+            skill_names,
+            user_mood,
+            topic_name,
+            topic_resolved,
+            topic_configured,
+            chat_id=chat_id_int,
+            thread_id=thread_id,
         )
         system_hash = hashlib.sha256(system_prompt.encode()).hexdigest()
 

@@ -341,7 +341,14 @@ class AgentLoop:
         topic_temperature = None
         topic_max_tokens = None
         if topic_name:
-            topic_config = self.context.get_topic_config(topic_name)
+            chat_id_int: int | None = None
+            try:
+                chat_id_int = int(chat_id)
+            except (ValueError, TypeError):
+                pass
+            topic_config = self.context.get_topic_config(
+                topic_name, chat_id=chat_id_int, thread_id=message_thread_id
+            )
             if topic_config:
                 topic_model = topic_config.model
                 topic_temperature = topic_config.temperature
@@ -568,6 +575,7 @@ class AgentLoop:
                 topic_name=msg.metadata.get("topic_name"),
                 topic_resolved=msg.metadata.get("topic_resolved", True),
                 topic_configured=msg.metadata.get("topic_configured", True),
+                thread_id=msg.metadata.get("message_thread_id"),
             )
             messages = build_result["messages"]
             final_content, _, all_msgs = await self._run_agent_loop(
@@ -650,6 +658,7 @@ class AgentLoop:
             topic_name=msg.metadata.get("topic_name"),
             topic_resolved=msg.metadata.get("topic_resolved", True),
             topic_configured=msg.metadata.get("topic_configured", True),
+            thread_id=msg.metadata.get("message_thread_id"),
         )
         initial_messages = build_result["messages"]
         system_prompt_hash = build_result["_system_prompt_hash"]

@@ -22,67 +22,44 @@ def _make_context(tmp_path):
 
 class TestLoadTopicRulesWithConfig:
     def test_returns_rules_text(self, tmp_path):
-        topic_dir = tmp_path / "topics" / "my-topic"
+        # Folder structure: topics/<chat_id>/<thread_id>/TOPIC.md
+        topic_dir = tmp_path / "topics" / "111" / "222"
         topic_dir.mkdir(parents=True)
         (topic_dir / "TOPIC.md").write_text(
             "# Topic: my-topic\n\n## purpose\nTest\n\n## litellm\nmodel: test/m\n"
         )
         ctx = _make_context(tmp_path)
-        result = ctx.load_topic_rules("my-topic")
+        result = ctx.load_topic_rules("my-topic", chat_id=111, thread_id=222)
         assert result is not None
         assert "## purpose" in result
 
     def test_get_topic_config_returns_config(self, tmp_path):
-        topic_dir = tmp_path / "topics" / "my-topic"
+        topic_dir = tmp_path / "topics" / "111" / "222"
         topic_dir.mkdir(parents=True)
         (topic_dir / "TOPIC.md").write_text(
             "# Topic: my-topic\n\n## purpose\nTest\n\n## litellm\nmodel: test/m\ntemperature: 0.5\nmax_tokens: 2048\n"
         )
         ctx = _make_context(tmp_path)
-        config = ctx.get_topic_config("my-topic")
+        config = ctx.get_topic_config("my-topic", chat_id=111, thread_id=222)
         assert config is not None
         assert config.model == "test/m"
         assert config.temperature == 0.5
         assert config.max_tokens == 2048
 
     def test_get_topic_config_no_litellm_returns_none(self, tmp_path):
-        topic_dir = tmp_path / "topics" / "plain"
+        topic_dir = tmp_path / "topics" / "111" / "222"
         topic_dir.mkdir(parents=True)
         (topic_dir / "TOPIC.md").write_text("# Topic: plain\n\n## purpose\nNo config\n")
         ctx = _make_context(tmp_path)
-        config = ctx.get_topic_config("plain")
+        config = ctx.get_topic_config("plain", chat_id=111, thread_id=222)
         assert config is None
 
     def test_get_topic_config_no_topic_file_returns_none(self, tmp_path):
         ctx = _make_context(tmp_path)
-        config = ctx.get_topic_config("nonexistent")
+        config = ctx.get_topic_config("nonexistent", chat_id=111, thread_id=222)
         assert config is None
 
-    def test_get_topic_config_uses_cache(self, tmp_path):
-        topic_dir = tmp_path / "topics" / "cached"
-        topic_dir.mkdir(parents=True)
-        (topic_dir / "TOPIC.md").write_text(
-            "## litellm\nmodel: test/m\n"
-        )
+    def test_load_topic_rules_returns_none_without_chat_id(self, tmp_path):
         ctx = _make_context(tmp_path)
-        config1 = ctx.get_topic_config("cached")
-        # Delete file to prove second call uses cache
-        (topic_dir / "TOPIC.md").unlink()
-        config2 = ctx.get_topic_config("cached")
-        assert config1 is not None
-        assert config2 is not None
-        assert config1.model == config2.model
-
-    def test_invalidate_clears_config_cache(self, tmp_path):
-        topic_dir = tmp_path / "topics" / "cached"
-        topic_dir.mkdir(parents=True)
-        (topic_dir / "TOPIC.md").write_text("## litellm\nmodel: old/model\n")
-        ctx = _make_context(tmp_path)
-        config1 = ctx.get_topic_config("cached")
-        assert config1.model == "old/model"
-
-        # Update file and invalidate
-        (topic_dir / "TOPIC.md").write_text("## litellm\nmodel: new/model\n")
-        ctx.invalidate_topic_cache("cached")
-        config2 = ctx.get_topic_config("cached")
-        assert config2.model == "new/model"
+        result = ctx.load_topic_rules("my-topic", chat_id=None, thread_id=None)
+        assert result is None
