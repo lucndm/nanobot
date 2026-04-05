@@ -514,7 +514,7 @@ class AgentLoop:
             )
             history = session.get_history(max_messages=0)
             current_role = "assistant" if msg.sender_id == "subagent" else "user"
-            messages = self.context.build_messages(
+            build_result = self.context.build_messages(
                 history=history,
                 current_message=msg.content,
                 channel=channel,
@@ -523,6 +523,7 @@ class AgentLoop:
                 topic_name=msg.metadata.get("topic_name"),
                 topic_resolved=msg.metadata.get("topic_resolved", True),
             )
+            messages = build_result["messages"]
             final_content, _, all_msgs = await self._run_agent_loop(
                 messages,
                 channel=channel,
@@ -575,7 +576,7 @@ class AgentLoop:
         user_mood = await self._detect_user_mood(msg.content, session)
         logger.debug("Detected user mood: {}", user_mood)
 
-        initial_messages = self.context.build_messages(
+        build_result = self.context.build_messages(
             history=history,
             current_message=msg.content,
             media=msg.media if msg.media else None,
@@ -584,6 +585,8 @@ class AgentLoop:
             topic_name=msg.metadata.get("topic_name"),
             topic_resolved=msg.metadata.get("topic_resolved", True),
         )
+        initial_messages = build_result["messages"]
+        system_prompt_hash = build_result["_system_prompt_hash"]
 
         async def _bus_progress(content: str, *, tool_hint: bool = False) -> None:
             meta = dict(msg.metadata or {})

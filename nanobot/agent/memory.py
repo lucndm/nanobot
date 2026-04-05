@@ -240,7 +240,7 @@ class MemoryConsolidator:
         model: str,
         sessions: SessionManager,
         context_window_tokens: int,
-        build_messages: Callable[..., list[dict[str, Any]]],
+        build_messages: Callable[..., Any],
         get_tool_definitions: Callable[[], list[dict[str, Any]]],
         max_completion_tokens: int = 4096,
     ):
@@ -314,6 +314,9 @@ class MemoryConsolidator:
             channel=channel,
             chat_id=chat_id,
         )
+        # build_messages now returns dict with 'messages' key
+        if isinstance(probe_messages, dict):
+            probe_messages = probe_messages["messages"]
         return estimate_prompt_tokens_chain(
             self.provider,
             self.model,

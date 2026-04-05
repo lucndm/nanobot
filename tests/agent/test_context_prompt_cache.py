@@ -52,12 +52,13 @@ def test_runtime_context_is_separate_untrusted_user_message(tmp_path) -> None:
     workspace = _make_workspace(tmp_path)
     builder = ContextBuilder(workspace)
 
-    messages = builder.build_messages(
+    result = builder.build_messages(
         history=[],
         current_message="Return exactly: OK",
         channel="cli",
         chat_id="direct",
     )
+    messages = result["messages"]
 
     assert messages[0]["role"] == "system"
     assert "## Current Session" not in messages[0]["content"]

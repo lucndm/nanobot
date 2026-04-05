@@ -1,6 +1,7 @@
 """Context builder for assembling agent prompts."""
 
 import base64
+import hashlib
 import mimetypes
 import platform
 from pathlib import Path
@@ -230,8 +231,13 @@ IMPORTANT: To send files (images, documents, audio, video) to the user, you MUST
         user_mood: str | None = None,
         topic_name: str | None = None,
         topic_resolved: bool = True,
-    ) -> list[dict[str, Any]]:
-        """Build the complete message list for an LLM call."""
+    ) -> dict[str, Any]:
+        """Build the complete message list for an LLM call.
+
+        Returns dict with:
+        - 'messages': list of message dicts for the LLM
+        - '_system_prompt_hash': SHA-256 hex digest of the system prompt
+        """
         runtime_ctx = self._build_runtime_context(channel, chat_id, self.timezone)
         user_content = self._build_user_content(current_message, media)
 
@@ -242,16 +248,17 @@ IMPORTANT: To send files (images, documents, audio, video) to the user, you MUST
         else:
             merged = [{"type": "text", "text": runtime_ctx}] + user_content
 
-        return [
-            {
-                "role": "system",
-                "content": self.build_system_prompt(
-                    skill_names, user_mood, topic_name, topic_resolved
-                ),
-            },
+        system_prompt = self.build_system_prompt(
+            skill_names, user_mood, topic_name, topic_resolved
+        )
+        system_hash = hashlib.sha256(system_prompt.encode()).hexdigest()
+
+        messages = [
+            {"role": "system", "content": system_prompt},
             *history,
             {"role": current_role, "content": merged},
         ]
+        return {"messages": messages, "_system_prompt_hash": system_hash}
 
     def _build_user_content(self, text: str, media: list[str] | None) -> str | list[dict[str, Any]]:
         """Build user message content with optional base64-encoded images."""
