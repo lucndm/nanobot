@@ -324,12 +324,25 @@ class AgentLoop:
         else:
             hook = loop_hook
 
+        # Resolve per-topic model overrides
+        topic_model = self.model
+        topic_temperature = None
+        topic_max_tokens = None
+        if topic_name:
+            topic_config = self.context.get_topic_config(topic_name)
+            if topic_config:
+                topic_model = topic_config.model
+                topic_temperature = topic_config.temperature
+                topic_max_tokens = topic_config.max_tokens
+
         result = await self.runner.run(
             AgentRunSpec(
                 initial_messages=initial_messages,
                 tools=self.tools,
-                model=self.model,
+                model=topic_model,
                 max_iterations=self.max_iterations,
+                temperature=topic_temperature,
+                max_tokens=topic_max_tokens,
                 hook=hook,
                 error_message="Sorry, I encountered an error calling the AI model.",
                 channel=channel,
