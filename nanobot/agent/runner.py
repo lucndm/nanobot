@@ -662,10 +662,8 @@ class AgentRunner:
         progress_state: dict[str, bool] | None = None
         live_file_edits: StreamingFileEditTracker | None = None
 
-        # Streaming response buffers for debug logging (raw vs sanitized)
-        _xml_sanitizer: Any = None
+        # Streaming response buffer for debug logging
         _raw_response_buf: list[str] = []
-        _sanitized_response_buf: list[str] = []
 
         if (
             spec.progress_callback is not None
@@ -685,16 +683,12 @@ class AgentRunner:
                 await live_file_edits.update(delta)
 
         if wants_streaming:
-            from nanobot.providers.openai_compat_provider import XmlToolCallSanitizer
-            _xml_sanitizer = XmlToolCallSanitizer()
 
             async def _stream(delta: str) -> None:
                 _raw_response_buf.append(delta)
-                safe = _xml_sanitizer.feed(delta)
-                if safe:
-                    _sanitized_response_buf.append(safe)
+                if delta:
                     context.streamed_content = True
-                    await hook.on_stream(context, safe)
+                await hook.on_stream(context, delta)
 
             async def _thinking(delta: str) -> None:
                 if not delta:
@@ -774,30 +768,14 @@ class AgentRunner:
         if progress_state and progress_state.get("reasoning_open"):
             await hook.emit_reasoning_end()
 
-        # Log raw LLM response vs sanitized channel output for debugging.
-        # Only streams via _stream() (XmlToolCallSanitizer path) populate the buffers.
+        # Log raw LLM streaming response for debugging
         if _raw_response_buf:
             raw = "".join(_raw_response_buf)
-            sanitized = "".join(_sanitized_response_buf)
-            flushed = _xml_sanitizer.flush() if _xml_sanitizer else ""
-            if flushed:
-                sanitized += flushed
-            logger.debug(
-                "LLM raw response ({} chars): {}",
+            logger.info(
+                "LLM streaming response ({} chars): {}",
                 len(raw), raw[:500],
             )
-            if raw != sanitized:
-                logger.info(
-                    "Sanitized response ({} -> {} chars): {}",
-                    len(raw), len(sanitized), sanitized[:500],
-                )
-            else:
-                logger.debug(
-                    "Channel response ({} chars): {}",
-                    len(sanitized), sanitized[:500],
-                )
             _raw_response_buf.clear()
-            _sanitized_response_buf.clear()
 
         return response
 
