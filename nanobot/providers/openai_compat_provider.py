@@ -161,12 +161,33 @@ _XML_PARAM_RE = _re.compile(
 _XML_TOOL_CALL_MARKER_RE = _re.compile(r"<tool_call[^>]*/?>")
 # Closing tool-call tags
 _XML_TOOL_CALL_CLOSE_RE = _re.compile(r"</tool_call[^>]*>")
+# <tool_call_block>…</tool_call_block> emitted by some models (e.g. mimo-v2.5)
+_XML_TOOL_CALL_BLOCK_RE = _re.compile(
+    r"<tool_call_block>\s*.*?\s*</tool_call_block>",
+    _re.DOTALL,
+)
+# <invoke name="…"><parameter name="…">VALUE</parameter></invoke> — some models
+# (e.g. via LiteLLM MCP gateway) use this format for tool calls.
+_XML_INVOKE_RE = _re.compile(
+    r"<invoke\s+name=\"(?P<iname>[^\"]+)\">\s*"
+    r"(?P<iparams>(?:<parameter\s+name=\"[^\"]+\">[^<]*</parameter>\s*)*)"
+    r"</invoke>",
+    _re.DOTALL,
+)
 # Orphan function blocks where the leading '<' was emitted in a reasoning
 # delta and the rest arrived in content deltas: ``function=NAME>…</function>``
 _XML_ORPHAN_FUNCTION_RE = _re.compile(
     r"function=(?P<oname>[^>]+)>\s*"
     r"(?P<oparams>(?:<parameter=[^>]+>[^<]*</parameter>\s*)*)"
     r"</function>",
+    _re.DOTALL,
+)
+# Orphan invoke blocks where ``<invoke`` was in reasoning and ``name=…>…</invoke>``
+# arrives in content: ``name="TOOL_NAME">…</invoke>``
+_XML_ORPHAN_INVOKE_RE = _re.compile(
+    r"name=\"(?P<oname>[^\"]+)\">\s*"
+    r"(?P<oparams>(?:<parameter\s+name=\"[^\"]+\">[^<]*</parameter>\s*)*)"
+    r"</invoke>",
     _re.DOTALL,
 )
 
@@ -210,9 +231,12 @@ def _extract_xml_tool_calls(
             [c.name for c in calls],
         )
         cleaned = _XML_FUNCTION_RE.sub("", cleaned)
-    # Remove spurious tool_call markers
+    # Remove spurious tool_call markers and other XML tool artifacts
     cleaned = _XML_TOOL_CALL_MARKER_RE.sub("", cleaned)
     cleaned = _XML_TOOL_CALL_CLOSE_RE.sub("", cleaned)
+    cleaned = _XML_TOOL_CALL_BLOCK_RE.sub("", cleaned)
+    cleaned = _XML_INVOKE_RE.sub("", cleaned)
+    cleaned = _XML_ORPHAN_INVOKE_RE.sub("", cleaned)
     cleaned = cleaned.strip() or None
 
     if not calls and cleaned == content:
@@ -250,32 +274,87 @@ class XmlToolCallSanitizer:
     """
 
     # Opening markers that signal a potential XML artifact
-    _OPEN_MARKERS = ("<function=", "<tool_call", "<tool")
+    _OPEN_MARKERS = ("<function=", "<tool_call", "<tool", "<invoke", "<tool_call_block")
     # Prefixes to buffer during streaming — includes partial forms like
     # ``<function`` (without ``=``) because the model may emit the tag
     # name across multiple deltas: ``<function`` then ``=name>``.
     # Also includes ``<parameter`` for nested parameter tags and
     # ``function=`` to catch orphan fragments where the leading ``<`` was
     # emitted in a reasoning delta (bypassing the content sanitizer).
+    # ``name="`` catches orphan invoke blocks where ``<invoke`` was in
+    # reasoning and ``name="TOOL_NAME">`` arrives in content.
     _BUFFER_PREFIXES = (
         "<function=", "<function", "<tool_call", "<tool", "</tool", "</",
-        "<parameter", "function=",
+        "<parameter", "function=", "<invoke", "name=\"", "<tool_call_block",
     )
 
     def __init__(self) -> None:
         self._buf = ""
+
+    @staticmethod
+    def _needs_space_before(buf_after: str, out_so_far: str) -> bool:
+        """Return True when a space should be inserted between two fragments.
+
+        After stripping an XML block the text before and after the block may
+        have been emitted as separate deltas with no whitespace at the
+        boundary — e.g. ``"Đã" + <invoke…> + "tạo"`` → ``"Đãtạo"``.
+        We insert a space when *both* sides end/start with a non-whitespace
+        character so the result reads naturally.
+        """
+        if not out_so_far or not buf_after:
+            return False
+        return not out_so_far[-1].isspace() and not buf_after[0].isspace()
 
     def feed(self, delta: str) -> str:
         """Process a streaming delta, returning safe text (empty if buffered)."""
         self._buf += delta
         out = ""
         while self._buf:
-            # If buffer contains a complete <function=...> block, strip it
+            # Specific full-block patterns first (before generic markers)
+            # so that e.g. <tool_call_block>…</tool_call_block> is stripped
+            # as a unit rather than the generic <tool_call…> matching only
+            # the opening tag.
+            # Strip complete <function=...>...</function> blocks
             m = _XML_FUNCTION_RE.search(self._buf)
             if m:
                 out += self._buf[: m.start()]
                 self._buf = self._buf[m.end():]
+                if self._needs_space_before(self._buf, out):
+                    out += " "
                 continue
+            # Strip complete <tool_call_block>…</tool_call_block> blocks
+            m5 = _XML_TOOL_CALL_BLOCK_RE.search(self._buf)
+            if m5:
+                out += self._buf[: m5.start()]
+                self._buf = self._buf[m5.end():]
+                if self._needs_space_before(self._buf, out):
+                    out += " "
+                continue
+            # Strip complete <invoke name="…">…</invoke> blocks
+            m6 = _XML_INVOKE_RE.search(self._buf)
+            if m6:
+                out += self._buf[: m6.start()]
+                self._buf = self._buf[m6.end():]
+                if self._needs_space_before(self._buf, out):
+                    out += " "
+                continue
+            # Strip orphan function blocks (leading '<' was in reasoning delta)
+            m4 = _XML_ORPHAN_FUNCTION_RE.search(self._buf)
+            if m4:
+                out += self._buf[: m4.start()]
+                self._buf = self._buf[m4.end():]
+                if self._needs_space_before(self._buf, out):
+                    out += " "
+                continue
+            # Strip orphan invoke blocks (<invoke> in reasoning, name="…"> in content)
+            m7 = _XML_ORPHAN_INVOKE_RE.search(self._buf)
+            if m7:
+                out += self._buf[: m7.start()]
+                self._buf = self._buf[m7.end():]
+                if self._needs_space_before(self._buf, out):
+                    out += " "
+                continue
+            # Generic markers (checked after specific patterns)
             # Strip complete <tool_call...> markers
             m2 = _XML_TOOL_CALL_MARKER_RE.search(self._buf)
             if m2:
@@ -288,17 +367,13 @@ class XmlToolCallSanitizer:
                 out += self._buf[: m3.start()]
                 self._buf = self._buf[m3.end():]
                 continue
-            # Strip orphan function blocks (leading '<' was in reasoning delta)
-            m4 = _XML_ORPHAN_FUNCTION_RE.search(self._buf)
-            if m4:
-                out += self._buf[: m4.start()]
-                self._buf = self._buf[m4.end():]
-                continue
-            # Check if buffer might contain the START of an incomplete XML block
-            # Hold back from the earliest marker onward
+            # Check if buffer might contain the START of an incomplete XML block.
+            # Use find() (not rfind) so we buffer from the EARLIEST occurrence —
+            # rfind would skip an orphan at position 0 when a later occurrence
+            # exists inside parameter tags.
             earliest = len(self._buf)
             for prefix in self._BUFFER_PREFIXES:
-                idx = self._buf.rfind(prefix)
+                idx = self._buf.find(prefix)
                 if 0 <= idx < earliest:
                     earliest = idx
             if earliest < len(self._buf):
@@ -328,16 +403,31 @@ class XmlToolCallSanitizer:
         m = _XML_ORPHAN_FUNCTION_RE.search(remaining)
         if m:
             remaining = remaining[: m.start()] + remaining[m.end():]
-        # Find the earliest prefix position (same strategy as feed()).
+        m = _XML_ORPHAN_INVOKE_RE.search(remaining)
+        if m:
+            remaining = remaining[: m.start()] + remaining[m.end():]
+        m = _XML_TOOL_CALL_BLOCK_RE.search(remaining)
+        if m:
+            remaining = remaining[: m.start()] + remaining[m.end():]
+        m = _XML_INVOKE_RE.search(remaining)
+        if m:
+            remaining = remaining[: m.start()] + remaining[m.end():]
+        # Find the earliest prefix position (same strategy as feed() — use
+        # find() for earliest occurrence, not rfind).
         earliest = len(remaining)
         for prefix in self._BUFFER_PREFIXES:
-            idx = remaining.rfind(prefix)
+            idx = remaining.find(prefix)
             if idx < 0:
                 continue
             # ``function=`` is ambiguous — only strip when the tail looks
             # like an XML tag (``function=WORD>…``).  Plain text such as
             # "function=main is important" is preserved.
             if prefix == "function=" and not _re.search(r"function=\w+>", remaining[idx:]):
+                continue
+            # ``name="`` is ambiguous — only strip when preceded by orphan
+            # invoke context (looks like ``name="TOOL">…</invoke>``).
+            # Plain text like 'the name="Alice"' is preserved.
+            if prefix == 'name="' and not _re.search(r'name="[^"]+">.*?</invoke>', remaining[idx:], _re.DOTALL):
                 continue
             if idx < earliest:
                 earliest = idx
