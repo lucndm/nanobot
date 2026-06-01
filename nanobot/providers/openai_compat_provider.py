@@ -290,9 +290,10 @@ class XmlToolCallSanitizer:
 
     def __init__(self) -> None:
         self._buf = ""
+        self._last_emitted: str | None = None  # last char emitted by previous feed()
+        self._xml_stripped = False  # True when XML was stripped since last text emit
 
-    @staticmethod
-    def _needs_space_before(buf_after: str, out_so_far: str) -> bool:
+    def _needs_space_before(self, buf_after: str, out_so_far: str) -> bool:
         """Return True when a space should be inserted between two fragments.
 
         After stripping an XML block the text before and after the block may
@@ -301,9 +302,14 @@ class XmlToolCallSanitizer:
         We insert a space when *both* sides end/start with a non-whitespace
         character so the result reads naturally.
         """
-        if not out_so_far or not buf_after:
+        if not buf_after:
             return False
-        return not out_so_far[-1].isspace() and not buf_after[0].isspace()
+        # Check boundary: last char of what we're about to emit (out_so_far)
+        # or if out_so_far is empty, use the last char emitted by a previous feed().
+        last_char = out_so_far[-1] if out_so_far else self._last_emitted
+        if not last_char:
+            return False
+        return not last_char.isspace() and not buf_after[0].isspace()
 
     def feed(self, delta: str) -> str:
         """Process a streaming delta, returning safe text (empty if buffered)."""
@@ -319,6 +325,7 @@ class XmlToolCallSanitizer:
             if m:
                 out += self._buf[: m.start()]
                 self._buf = self._buf[m.end():]
+                self._xml_stripped = True
                 if self._needs_space_before(self._buf, out):
                     out += " "
                 continue
@@ -327,6 +334,7 @@ class XmlToolCallSanitizer:
             if m5:
                 out += self._buf[: m5.start()]
                 self._buf = self._buf[m5.end():]
+                self._xml_stripped = True
                 if self._needs_space_before(self._buf, out):
                     out += " "
                 continue
@@ -335,6 +343,7 @@ class XmlToolCallSanitizer:
             if m6:
                 out += self._buf[: m6.start()]
                 self._buf = self._buf[m6.end():]
+                self._xml_stripped = True
                 if self._needs_space_before(self._buf, out):
                     out += " "
                 continue
@@ -343,6 +352,7 @@ class XmlToolCallSanitizer:
             if m4:
                 out += self._buf[: m4.start()]
                 self._buf = self._buf[m4.end():]
+                self._xml_stripped = True
                 if self._needs_space_before(self._buf, out):
                     out += " "
                 continue
@@ -351,6 +361,7 @@ class XmlToolCallSanitizer:
             if m7:
                 out += self._buf[: m7.start()]
                 self._buf = self._buf[m7.end():]
+                self._xml_stripped = True
                 if self._needs_space_before(self._buf, out):
                     out += " "
                 continue
@@ -360,12 +371,14 @@ class XmlToolCallSanitizer:
             if m2:
                 out += self._buf[: m2.start()]
                 self._buf = self._buf[m2.end():]
+                self._xml_stripped = True
                 continue
             # Strip complete </tool_call...> markers
             m3 = _XML_TOOL_CALL_CLOSE_RE.search(self._buf)
             if m3:
                 out += self._buf[: m3.start()]
                 self._buf = self._buf[m3.end():]
+                self._xml_stripped = True
                 continue
             # Check if buffer might contain the START of an incomplete XML block.
             # Use find() (not rfind) so we buffer from the EARLIEST occurrence —
@@ -383,6 +396,20 @@ class XmlToolCallSanitizer:
             # No XML pattern — flush everything
             out += self._buf
             self._buf = ""
+        # Cross-feed space: if XML was stripped in a previous feed() and this
+        # output starts with non-space, insert a space before it.
+        if (
+            out
+            and self._xml_stripped
+            and not out[0].isspace()
+            and self._last_emitted
+            and not self._last_emitted.isspace()
+        ):
+            out = " " + out
+        # Track state
+        if out:
+            self._last_emitted = out[-1]
+            self._xml_stripped = False
         return out
 
     def flush(self) -> str:
@@ -433,6 +460,7 @@ class XmlToolCallSanitizer:
                 earliest = idx
         if earliest < len(remaining):
             remaining = remaining[:earliest]
+        self._last_emitted = None
         return remaining
 
 

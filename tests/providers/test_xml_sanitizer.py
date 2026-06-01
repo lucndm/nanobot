@@ -258,3 +258,60 @@ class TestXmlToolCallSanitizerToolCallBlock:
             "</tool_call_block>"
         )
         assert result == ""
+
+
+class TestXmlToolCallSanitizerCrossFeedSpace:
+    """Space insertion across multiple feed() calls.
+
+    The model may emit text before an XML block in one delta and text after
+    the block in a later delta.  When the block is stripped, the two text
+    fragments get concatenated without a space.  The sanitizer tracks the
+    last emitted character across feed() calls to insert a space at the
+    boundary.
+    """
+
+    def test_space_inserted_across_feeds(self) -> None:
+        """'Đã' flushed in feed 1, invoke stripped in feed 2, 'tạo' in feed 3."""
+        s = XmlToolCallSanitizer()
+        assert s.feed("Đã") == "Đã"
+        assert s.feed(
+            '<invoke name="exec"><parameter name="cmd">ls</parameter></invoke>'
+        ) == ""
+        result = s.feed("tạo task")
+        # Space inserted because last emitted 'ã' and first char 't' are non-space
+        assert result == " tạo task"
+
+    def test_no_space_when_prev_ends_with_space(self) -> None:
+        s = XmlToolCallSanitizer()
+        assert s.feed("Hello ") == "Hello "
+        assert s.feed(
+            '<invoke name="exec"><parameter name="cmd">ls</parameter></invoke>'
+        ) == ""
+        result = s.feed("World")
+        assert result == "World"
+
+    def test_no_space_when_next_starts_with_space(self) -> None:
+        s = XmlToolCallSanitizer()
+        assert s.feed("Hello") == "Hello"
+        assert s.feed(
+            '<invoke name="exec"><parameter name="cmd">ls</parameter></invoke>'
+        ) == ""
+        result = s.feed(" World")
+        assert result == " World"
+
+    def test_cross_feed_function_block(self) -> None:
+        """Same test with <function=...> format."""
+        s = XmlToolCallSanitizer()
+        assert s.feed("Done.") == "Done."
+        assert s.feed("<function=read_file><parameter=path>/tmp</parameter></function>") == ""
+        result = s.feed("Next step")
+        assert result == " Next step"
+
+    def test_cross_feed_orphan_invoke(self) -> None:
+        """Orphan invoke split across feeds."""
+        s = XmlToolCallSanitizer()
+        assert s.feed("Done") == "Done"
+        # Orphan: name="..."> arrived without leading <invoke
+        assert s.feed('name="exec"><parameter name="cmd">ls</parameter></invoke>') == ""
+        result = s.feed("here")
+        assert result == " here"
